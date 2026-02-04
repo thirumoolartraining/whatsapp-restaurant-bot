@@ -1,10 +1,11 @@
 const express = require('express');
 const Customer = require('../models/Customer');
 const Order = require('../models/Order');
-const authMiddleware = require('../middleware/auth');
+const authenticate = require('../middleware/authenticate');
+const authorize = require('../middleware/authorize');
 const router = express.Router();
 
-router.get('/', authMiddleware, async (req, res) => {
+router.get('/', authenticate, authorize(['admin']), async (req, res) => {
   try {
     const { page = 1, limit = 20 } = req.query;
     

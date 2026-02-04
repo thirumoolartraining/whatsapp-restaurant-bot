@@ -1,9 +1,10 @@
 const express = require('express');
 const groqAi = require('../services/groqAi');
-const authMiddleware = require('../middleware/auth');
+const authenticate = require('../middleware/authenticate');
+const authorize = require('../middleware/authorize');
 const router = express.Router();
 
-router.post('/generate-description', authMiddleware, async (req, res) => {
+router.post('/generate-description', authenticate, authorize(['admin']), async (req, res) => {
   try {
     const { name, category } = req.body;
     const description = await groqAi.generateDescription(name, category);
@@ -13,7 +14,7 @@ router.post('/generate-description', authMiddleware, async (req, res) => {
   }
 });
 
-router.post('/generate-tags', authMiddleware, async (req, res) => {
+router.post('/generate-tags', authenticate, authorize(['admin']), async (req, res) => {
   try {
     const { name, category, foodType, quantity, unit } = req.body;
     const tags = await groqAi.generateTags(name, category, foodType, quantity, unit);

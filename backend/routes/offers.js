@@ -1,7 +1,8 @@
 const express = require('express');
 const router = express.Router();
 const Offer = require('../models/Offer');
-const auth = require('../middleware/auth');
+const authenticate = require('../middleware/authenticate');
+const authorize = require('../middleware/authorize');
 const cloudinary = require('../services/cloudinary');
 const googleSheets = require('../services/googleSheets');
 const multer = require('multer');
@@ -17,7 +18,7 @@ const uploadMultiple = upload.fields([
 ]);
 
 // Get all offers (admin)
-router.get('/', auth, async (req, res) => {
+router.get('/', authenticate, authorize(['admin']), async (req, res) => {
   try {
     const offers = await Offer.find().sort({ createdAt: -1 });
     res.json(offers);
@@ -27,7 +28,7 @@ router.get('/', auth, async (req, res) => {
 });
 
 // Get all customers from Google Sheets (cost-saving approach)
-router.get('/customers', auth, async (req, res) => {
+router.get('/customers', authenticate, authorize(['admin']), async (req, res) => {
   try {
     const { customers, error } = await googleSheets.getAllCustomers();
     
@@ -46,7 +47,7 @@ router.get('/customers', auth, async (req, res) => {
 });
 
 // Get top percentage of customers by spending
-router.get('/customers/top/:percentage', auth, async (req, res) => {
+router.get('/customers/top/:percentage', authenticate, authorize(['admin']), async (req, res) => {
   try {
     const percentage = parseInt(req.params.percentage);
     
@@ -73,7 +74,7 @@ router.get('/customers/top/:percentage', auth, async (req, res) => {
 });
 
 // Create offer
-router.post('/', auth, uploadMultiple, async (req, res) => {
+router.post('/', authenticate, authorize(['admin']), uploadMultiple, async (req, res) => {
   try {
     const { 
       title, description, offerType, code, discountType, discountValue, 
@@ -248,7 +249,7 @@ router.post('/', auth, uploadMultiple, async (req, res) => {
 });
 
 // Update offer
-router.put('/:id', auth, uploadMultiple, async (req, res) => {
+router.put('/:id', authenticate, authorize(['admin']), uploadMultiple, async (req, res) => {
   try {
     const { 
       title, description, offerType, code, discountType, discountValue, 
@@ -469,7 +470,7 @@ router.put('/:id', auth, uploadMultiple, async (req, res) => {
 });
 
 // Delete offer
-router.delete('/:id', auth, async (req, res) => {
+router.delete('/:id', authenticate, authorize(['admin']), async (req, res) => {
   try {
     // Get offer first to delete images from Cloudinary and remove from menu items
     const offer = await Offer.findById(req.params.id);
@@ -559,7 +560,7 @@ router.delete('/:id', auth, async (req, res) => {
 });
 
 // Toggle active status
-router.patch('/:id/toggle', auth, async (req, res) => {
+router.patch('/:id/toggle', authenticate, authorize(['admin']), async (req, res) => {
   try {
     const offer = await Offer.findById(req.params.id);
     if (!offer) return res.status(404).json({ error: 'Offer not found' });
@@ -653,7 +654,7 @@ router.patch('/:id/toggle', auth, async (req, res) => {
 });
 
 // Toggle popup status
-router.patch('/:id/toggle-popup', auth, async (req, res) => {
+router.patch('/:id/toggle-popup', authenticate, authorize(['admin']), async (req, res) => {
   try {
     const offer = await Offer.findById(req.params.id);
     if (!offer) return res.status(404).json({ error: 'Offer not found' });

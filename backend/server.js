@@ -4,6 +4,12 @@ const mongoose = require('mongoose');
 const cors = require('cors');
 const path = require('path');
 const dataEvents = require('./services/eventEmitter');
+const corsConfig = require('./config/corsConfig');
+const { authLimiter, adminLimiter, webhookLimiter } = require('./middleware/rateLimit');
+
+// Validate environment variables before starting
+const validateEnv = require('./config/validateEnv');
+validateEnv();
 
 const authRoutes = require('./routes/auth');
 const menuRoutes = require('./routes/menu');
@@ -27,20 +33,13 @@ const categoryScheduler = require('./services/categoryScheduler');
 const orderCleanup = require('./services/orderCleanup');
 const cartCleanup = require('./services/cartCleanup');
 const googleSheets = require('./services/googleSheets');
+const errorHandler = require('./middleware/errorHandler');
 
 const app = express();
 
-// CORS configuration
-const corsOptions = {
-  origin: ['http://localhost:5173', 'https://restarunt-bot.vercel.app'],
-  credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
-};
-
-// Handle preflight requests for all routes
-app.options('*', cors(corsOptions));
-app.use(cors(corsOptions));
+// CORS configuration using explicit config
+app.options('*', cors(corsConfig));
+app.use(cors(corsConfig));
 app.use(express.json());
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
@@ -70,22 +69,25 @@ mongoose.connect(process.env.MONGODB_URI)
   })
   .catch(err => console.error('MongoDB connection error:', err));
 
-app.use('/api/auth', authRoutes);
+app.use('/api/auth', authLimiter, authRoutes);
 app.use('/api/menu', menuRoutes);
 app.use('/api/orders', orderRoutes);
 app.use('/api/webhook', webhookRoutes);
 app.use('/api/payment', paymentRoutes);
 app.use('/api/customers', customerRoutes);
-app.use('/api/analytics', analyticsRoutes);
-app.use('/api/ai', aiRoutes);
-app.use('/api/categories', categoryRoutes);
+app.use('/api/analytics', adminLimiter, analyticsRoutes);
+app.use('/api/ai', adminLimiter, aiRoutes);
+app.use('/api/categories', adminLimiter, categoryRoutes);
 app.use('/api/public', publicRoutes);
-app.use('/api/chatbot-images', chatbotImagesRoutes);
-app.use('/api/delivery', deliveryBoyRoutes);
-app.use('/api/hero-sections', heroSectionRoutes);
-app.use('/api/offers', offersRoutes);
-app.use('/api/whatsapp-broadcast', whatsappBroadcastRoutes);
-app.use('/api/settings', settingsRoutes);
+app.use('/api/chatbot-images', adminLimiter, chatbotImagesRoutes);
+app.use('/api/delivery', adminLimiter, deliveryBoyRoutes);
+app.use('/api/hero-sections', adminLimiter, heroSectionRoutes);
+app.use('/api/offers', adminLimiter, offersRoutes);
+app.use('/api/whatsapp-broadcast', adminLimiter, whatsappBroadcastRoutes);
+app.use('/api/settings', adminLimiter, settingsRoutes);
+
+// Global error handler
+app.use(errorHandler);
 
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
 

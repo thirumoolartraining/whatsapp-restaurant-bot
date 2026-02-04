@@ -1,6 +1,7 @@
 const express = require('express');
 const MenuItem = require('../models/MenuItem');
-const authMiddleware = require('../middleware/auth');
+const authenticate = require('../middleware/authenticate');
+const authorize = require('../middleware/authorize');
 const cloudinaryService = require('../services/cloudinary');
 const dataEvents = require('../services/eventEmitter');
 const multer = require('multer');
@@ -37,7 +38,7 @@ router.get('/categories', async (req, res) => {
   }
 });
 
-router.post('/', authMiddleware, upload.single('image'), async (req, res) => {
+router.post('/', authenticate, authorize(['admin']), upload.single('image'), async (req, res) => {
   try {
     const { name, description, price, originalPrice, category, unit, quantity, foodType, offerType, available, preparationTime, tags, image } = req.body;
     
@@ -144,7 +145,7 @@ router.post('/', authMiddleware, upload.single('image'), async (req, res) => {
   }
 });
 
-router.put('/:id', authMiddleware, upload.single('image'), async (req, res) => {
+router.put('/:id', authenticate, authorize(['admin']), upload.single('image'), async (req, res) => {
   try {
     const { name, description, price, originalPrice, category, unit, quantity, foodType, offerType, available, preparationTime, tags, image, removeImage } = req.body;
     
@@ -277,7 +278,7 @@ router.put('/:id', authMiddleware, upload.single('image'), async (req, res) => {
   }
 });
 
-router.delete('/:id', authMiddleware, async (req, res) => {
+router.delete('/:id', authenticate, authorize(['admin']), async (req, res) => {
   try {
     // Get item to delete its image from Cloudinary
     const item = await MenuItem.findById(req.params.id);
@@ -302,7 +303,7 @@ router.delete('/:id', authMiddleware, async (req, res) => {
 });
 
 // Toggle pause status for a menu item
-router.patch('/:id/toggle-pause', authMiddleware, async (req, res) => {
+router.patch('/:id/toggle-pause', authenticate, authorize(['admin']), async (req, res) => {
   try {
     const item = await MenuItem.findById(req.params.id);
     if (!item) {
@@ -321,7 +322,7 @@ router.patch('/:id/toggle-pause', authMiddleware, async (req, res) => {
 });
 
 // Bulk pause items by category
-router.patch('/bulk-pause', authMiddleware, async (req, res) => {
+router.patch('/bulk-pause', authenticate, authorize(['admin']), async (req, res) => {
   try {
     const { categoryName, isPaused } = req.body;
     if (!categoryName) {
@@ -343,7 +344,7 @@ router.patch('/bulk-pause', authMiddleware, async (req, res) => {
 });
 
 // Regenerate auto-tags for all menu items (one-time migration)
-router.post('/regenerate-tags', authMiddleware, async (req, res) => {
+router.post('/regenerate-tags', authenticate, authorize(['admin']), async (req, res) => {
   try {
     const items = await MenuItem.find();
     let updatedCount = 0;

@@ -2,7 +2,7 @@
 // This polls for new messages every few seconds
 
 const axios = require('axios');
-const chatbot = require('./chatbot');
+const messageProcessor = require('./messageProcessor');
 
 let isPolling = false;
 let pollInterval = null;
@@ -65,7 +65,17 @@ const polling = {
 
       if (phone && (message || selectedId)) {
         console.log('📱 Processing message:', { phone, message, messageType, selectedId });
-        await chatbot.handleMessage(phone, message, messageType, selectedId);
+        await messageProcessor.processInboundMessage({
+          provider: 'meta',
+          payload: {
+            phone,
+            text: message,
+            messageType,
+            selectedId,
+            senderName: null
+          },
+          reqId: `poll_${Date.now()}_${phone}`
+        });
         console.log('✅ Message handled');
       }
     }

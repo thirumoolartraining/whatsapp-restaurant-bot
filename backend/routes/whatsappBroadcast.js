@@ -1,10 +1,11 @@
 const express = require('express');
 const router = express.Router();
 const whatsappBroadcast = require('../services/whatsappBroadcast');
-const authMiddleware = require('../middleware/auth');
+const authenticate = require('../middleware/authenticate');
+const authorize = require('../middleware/authorize');
 
 // Get all WhatsApp contacts
-router.get('/contacts', authMiddleware, async (req, res) => {
+router.get('/contacts', authenticate, authorize(['admin']), async (req, res) => {
   try {
     const contacts = await whatsappBroadcast.getAllContacts();
     res.json({ success: true, contacts });
@@ -14,7 +15,7 @@ router.get('/contacts', authMiddleware, async (req, res) => {
 });
 
 // Get WhatsApp contacts statistics
-router.get('/stats', authMiddleware, async (req, res) => {
+router.get('/stats', authenticate, authorize(['admin']), async (req, res) => {
   try {
     const stats = await whatsappBroadcast.getStats();
     res.json({ success: true, stats });
@@ -24,7 +25,7 @@ router.get('/stats', authMiddleware, async (req, res) => {
 });
 
 // Sync existing customers to WhatsApp contacts
-router.post('/sync', authMiddleware, async (req, res) => {
+router.post('/sync', authenticate, authorize(['admin']), async (req, res) => {
   try {
     const result = await whatsappBroadcast.syncExistingCustomers();
     res.json(result);
@@ -34,7 +35,7 @@ router.post('/sync', authMiddleware, async (req, res) => {
 });
 
 // Send offer to all WhatsApp contacts
-router.post('/send-offer', authMiddleware, async (req, res) => {
+router.post('/send-offer', authenticate, authorize(['admin']), async (req, res) => {
   try {
     const { offerImageUrl, offerTitle, offerDescription, offerType } = req.body;
     
@@ -119,7 +120,7 @@ router.post('/send-offer', authMiddleware, async (req, res) => {
 });
 
 // Test send offer to a single phone number
-router.post('/test-send', authMiddleware, async (req, res) => {
+router.post('/test-send', authenticate, authorize(['admin']), async (req, res) => {
   try {
     const { phone, offerImageUrl, offerTitle, offerDescription, offerType } = req.body;
     

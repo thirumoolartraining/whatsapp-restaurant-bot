@@ -1,10 +1,25 @@
 const express = require('express');
 const chatbot = require('../services/chatbot');
+const messageProcessor = require('../services/messageProcessor');
 const whatsapp = require('../services/whatsapp');
 const googleSheets = require('../services/googleSheets');
 const metaCloud = require('../services/metaCloud');
 const groqAi = require('../services/groqAi');
+const metaSignatureVerify = require('../middleware/metaSignatureVerify');
+const { webhookLimiter } = require('../middleware/rateLimit');
 const router = express.Router();
+
+// Raw body capture middleware for signature verification
+router.use('/meta', express.raw({ type: 'application/json' }), (req, res, next) => {
+  req.rawBody = req.body;
+  // Parse JSON body normally for downstream processing
+  try {
+    req.body = JSON.parse(req.body);
+  } catch (error) {
+    return res.status(400).json({ error: 'Invalid JSON' });
+  }
+  next();
+});
 
 // Test Google Sheets connection
 router.get('/test-sheets', async (req, res) => {
@@ -45,7 +60,17 @@ router.get('/test/:phone', async (req, res) => {
 router.get('/test-menu/:phone', async (req, res) => {
   try {
     const { phone } = req.params;
-    await chatbot.handleMessage(phone, 'hi', 'text', null);
+    await messageProcessor.processInboundMessage({
+      provider: 'meta',
+      payload: {
+        phone,
+        text: 'hi',
+        messageType: 'text',
+        selectedId: null,
+        senderName: null
+      },
+      reqId: `test_menu_${Date.now()}_${phone}`
+    });
     res.json({ success: true, message: 'Welcome menu sent to ' + phone });
   } catch (error) {
     console.error('Test menu error:', error);
@@ -59,7 +84,17 @@ router.post('/simulate', async (req, res) => {
     const { phone, message, selectedId } = req.body;
     const messageType = selectedId ? 'list' : 'text';
     console.log('🧪 Simulating message:', { phone, message, messageType, selectedId });
-    await chatbot.handleMessage(phone, message || '', messageType, selectedId || null);
+    await messageProcessor.processInboundMessage({
+      provider: 'meta',
+      payload: {
+        phone,
+        text: message || '',
+        messageType,
+        selectedId: selectedId || null,
+        senderName: null
+      },
+      reqId: `simulate_${Date.now()}_${phone}`
+    });
     res.json({ success: true, message: 'Simulated message processed' });
   } catch (error) {
     console.error('Simulate error:', error);
@@ -114,7 +149,7 @@ router.get('/meta', (req, res) => {
 });
 
 // Meta WhatsApp Cloud API webhook endpoint
-router.post('/meta', async (req, res) => {
+router.post('/meta', metaSignatureVerify, webhookLimiter, async (req, res) => {
   console.log('📥 Webhook POST received');
   console.log('📥 Body:', JSON.stringify(req.body, null, 2));
   
@@ -220,8 +255,18 @@ router.post('/meta', async (req, res) => {
               const hasContent = text || selectedId || messageType === 'location';
               if (phone && hasContent) {
                 // Process message in the background
-                chatbot.handleMessage(phone, text, messageType, selectedId, senderName)
-                  .catch(err => console.error('❌ Async Chatbot Error:', err));
+                messageProcessor.processInboundMessage({
+                  provider: 'meta',
+                  payload: {
+                    phone,
+                    text,
+                    messageType,
+                    selectedId,
+                    senderName,
+                    message
+                  },
+                  reqId: `msg_${Date.now()}_${phone}`
+                }).catch(err => console.error('❌ Async Chatbot Error:', err));
               }
             }
           }

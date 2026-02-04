@@ -2,7 +2,8 @@ const express = require('express');
 const jwt = require('jsonwebtoken');
 const DeliveryBoy = require('../models/DeliveryBoy');
 const Order = require('../models/Order');
-const auth = require('../middleware/auth');
+const authenticate = require('../middleware/authenticate');
+const authorize = require('../middleware/authorize');
 const brevoMail = require('../services/brevoMail');
 const cloudinaryService = require('../services/cloudinary');
 const googleSheets = require('../services/googleSheets');
@@ -86,7 +87,7 @@ const sendPasswordEmail = async (email, name, password) => {
 // ============ ADMIN ROUTES (Protected) ============
 
 // Get all delivery boys (Admin) - with real-time online status
-router.get('/', auth, async (req, res) => {
+router.get('/', authenticate, authorize(['admin']), async (req, res) => {
   try {
     const deliveryBoys = await DeliveryBoy.find().select('-password').sort({ createdAt: -1 });
     
@@ -117,7 +118,7 @@ router.get('/', auth, async (req, res) => {
 });
 
 // Add new delivery boy (Admin)
-router.post('/', auth, upload.single('photo'), async (req, res) => {
+router.post('/', authenticate, authorize(['admin']), upload.single('photo'), async (req, res) => {
   try {
     const { name, email, phone, dob } = req.body;
     
@@ -198,7 +199,7 @@ router.post('/', auth, upload.single('photo'), async (req, res) => {
 });
 
 // Update delivery boy (Admin)
-router.put('/:id', auth, upload.single('photo'), async (req, res) => {
+router.put('/:id', authenticate, authorize(['admin']), upload.single('photo'), async (req, res) => {
   try {
     const { name, phone, dob, isActive } = req.body;
     const deliveryBoy = await DeliveryBoy.findById(req.params.id);
@@ -266,7 +267,7 @@ router.put('/:id', auth, upload.single('photo'), async (req, res) => {
 });
 
 // Delete delivery boy (Admin) - This will invalidate their token
-router.delete('/:id', auth, async (req, res) => {
+router.delete('/:id', authenticate, authorize(['admin']), async (req, res) => {
   try {
     const deliveryBoy = await DeliveryBoy.findById(req.params.id);
     
@@ -292,7 +293,7 @@ router.delete('/:id', auth, async (req, res) => {
 });
 
 // Reset password (Admin) - Send new password via email
-router.post('/:id/reset-password', auth, async (req, res) => {
+router.post('/:id/reset-password', authenticate, authorize(['admin']), async (req, res) => {
   try {
     const deliveryBoy = await DeliveryBoy.findById(req.params.id);
     

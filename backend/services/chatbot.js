@@ -9,6 +9,12 @@ const googleSheets = require('./googleSheets');
 const groqAi = require('./groqAi');
 const chatbotImagesService = require('./chatbotImages');
 const whatsappBroadcast = require('./whatsappBroadcast');
+const conversationState = require('./conversationState');
+const menuHandler = require('./domains/menuHandler');
+const cartHandler = require('./domains/cartHandler');
+const orderHandler = require('./domains/orderHandler');
+const paymentInitiationHandler = require('./domains/paymentInitiationHandler');
+const locationHandler = require('./domains/locationHandler');
 const axios = require('axios');
 
 const generateOrderId = (serviceType = 'delivery') => {
@@ -138,187 +144,6 @@ const calculateDistance = async (lat1, lon1, lat2, lon2) => {
   console.log(`📍 =========================================\n`);
   
   return Math.round(approximateRoadDistance * 100) / 100;
-};
-
-// Helper to calculate delivery charge based on customer location
-const calculateDeliveryCharge = async (customerLat, customerLon) => {
-  try {
-    // Get restaurant location settings
-    const restaurantLocation = await Settings.getValue('restaurantLocation');
-    const deliverySettings = await Settings.getValue('deliverySettings');
-    
-    // If settings not configured, no delivery charge
-    if (!restaurantLocation?.latitude || !restaurantLocation?.longitude) {
-      console.log('📍 Restaurant location not configured - no delivery charge');
-      return { charge: 0, distance: null, withinFreeRadius: true, message: null };
-    }
-    
-    if (!deliverySettings) {
-      console.log('🚚 Delivery settings not configured - no delivery charge');
-      return { charge: 0, distance: null, withinFreeRadius: true, message: null };
-    }
-    
-    // Calculate RADIUS distance (straight-line) - not road distance
-    // This is simpler and more consistent regardless of route taken
-    const distance = calculateStraightLineDistance(
-      restaurantLocation.latitude, 
-      restaurantLocation.longitude,
-      customerLat, 
-      customerLon
-    );
-    
-    console.log(`\n📍 ========== RADIUS CHECK ==========`);
-    console.log(`📍 Restaurant: ${restaurantLocation.latitude}, ${restaurantLocation.longitude}`);
-    console.log(`📍 Customer: ${customerLat}, ${customerLon}`);
-    console.log(`📏 Radius distance: ${distance} KM (straight-line)`);
-    console.log(`📍 ===================================\n`);
-    
-    if (distance === null) {
-      console.log('📍 Could not calculate distance - no delivery charge');
-      return { charge: 0, distance: null, withinFreeRadius: true, message: null };
-    }
-    
-    console.log(`📍 Distance from restaurant: ${distance} KM`);
-    
-    const noFreeDelivery = deliverySettings.noFreeDelivery || false;
-    const baseDeliveryCharge = deliverySettings.baseDeliveryCharge || 0;
-    const freeRadius = deliverySettings.freeDeliveryRadius || 5;
-    const maxRadius = deliverySettings.maxDeliveryRadius;
-    const extraChargeEnabled = deliverySettings.enableExtraDeliveryCharge;
-    const extraCharge = deliverySettings.extraDeliveryCharge || 0;
-    
-    // Check if beyond max delivery radius first
-    if (maxRadius && distance > maxRadius) {
-      console.log(`❌ Beyond max delivery radius (${maxRadius} KM)`);
-      return { 
-        charge: null, 
-        distance, 
-        withinFreeRadius: false, 
-        beyondMaxRadius: true,
-        maxRadius,
-        message: `Sorry, we don't deliver to locations beyond ${maxRadius} KM from our restaurant. Your location is ${distance.toFixed(1)} KM away.`
-      };
-    }
-    
-    // If restaurant charges for ALL deliveries (no free delivery)
-    if (noFreeDelivery) {
-      console.log(`💰 No free delivery - base charge: ₹${baseDeliveryCharge}`);
-      // If outside free radius AND extra charge enabled, add extra on top of base
-      if (distance > freeRadius && extraChargeEnabled && extraCharge > 0) {
-        const totalCharge = baseDeliveryCharge + extraCharge;
-        console.log(`💰 Beyond ${freeRadius} KM - total charge: ₹${totalCharge}`);
-        return { 
-          charge: totalCharge, 
-          distance, 
-          withinFreeRadius: false, 
-          message: `Your location is ${distance.toFixed(1)} KM away. Delivery charge: ₹${totalCharge} (₹${baseDeliveryCharge} base + ₹${extraCharge} extra).`
-        };
-      }
-      return { 
-        charge: baseDeliveryCharge, 
-        distance, 
-        withinFreeRadius: true, 
-        message: `Delivery charge: ₹${baseDeliveryCharge}`
-      };
-    }
-    
-    // Check if within free delivery radius
-    if (distance <= freeRadius) {
-      console.log(`✅ Within free delivery radius (${freeRadius} KM)`);
-      return { 
-        charge: 0, 
-        distance, 
-        withinFreeRadius: true, 
-        message: null 
-      };
-    }
-    
-    // Outside free radius - check if extra charge is enabled
-    if (extraChargeEnabled && extraCharge > 0) {
-      console.log(`💰 Outside free radius - adding delivery charge: ₹${extraCharge}`);
-      return { 
-        charge: extraCharge, 
-        distance, 
-        withinFreeRadius: false, 
-        message: `Your location is ${distance.toFixed(1)} KM away. A delivery charge of ₹${extraCharge} will be added.`
-      };
-    }
-    
-    // Extra charge NOT enabled AND customer is outside free radius - REJECT ORDER
-    console.log(`❌ Outside free radius (${freeRadius} KM) - delivery not available`);
-    return { 
-      charge: null, 
-      distance, 
-      withinFreeRadius: false, 
-      deliveryNotAvailable: true,
-      freeRadius,
-      message: `Sorry, our delivery service is available only within ${freeRadius} KM. Your location is ${distance.toFixed(1)} KM away. Please try pickup instead.`
-    };
-    
-  } catch (error) {
-    console.error('Error calculating delivery charge:', error);
-    return { charge: 0, distance: null, withinFreeRadius: true, message: null };
-  }
-};
-
-// Helper to check if cart items are still available
-const checkCartAvailability = async (cart) => {
-  if (!cart || cart.length === 0) return { available: true, unavailableItems: [] };
-  
-  const unavailableItems = [];
-  const allCategories = await Category.find({ isActive: true });
-  
-  // Get scheduled categories that are currently ACTIVE
-  const scheduledActiveCategories = allCategories
-    .filter(c => c.schedule?.enabled && !c.isPaused && !c.isSoldOut)
-    .map(c => c.name);
-  
-  // Get scheduled categories that are LOCKED
-  const scheduledLockedCategories = allCategories
-    .filter(c => c.schedule?.enabled && (c.isPaused || c.isSoldOut))
-    .map(c => c.name);
-  
-  for (const cartItem of cart) {
-    const menuItem = await MenuItem.findById(cartItem.menuItem);
-    if (!menuItem) {
-      unavailableItems.push({ name: cartItem.menuItem?.name || 'Unknown item', reason: 'deleted' });
-      continue;
-    }
-    
-    // Check if item is unavailable
-    if (!menuItem.available) {
-      unavailableItems.push({ name: menuItem.name, reason: 'unavailable' });
-      continue;
-    }
-    
-    const itemCategories = Array.isArray(menuItem.category) ? menuItem.category : [menuItem.category];
-    
-    // Check if item has any scheduled category that is ACTIVE → available
-    const hasScheduledActiveCategory = itemCategories.some(cat => scheduledActiveCategories.includes(cat));
-    if (hasScheduledActiveCategory) continue; // Item is available
-    
-    // Check if item has any scheduled category that is LOCKED → unavailable
-    const hasScheduledLockedCategory = itemCategories.some(cat => scheduledLockedCategories.includes(cat));
-    if (hasScheduledLockedCategory) {
-      unavailableItems.push({ name: menuItem.name, reason: 'category_paused' });
-      continue;
-    }
-    
-    // Item has no scheduled categories - check if any non-scheduled category is active
-    const hasActiveNonScheduledCategory = itemCategories.some(cat => {
-      const category = allCategories.find(c => c.name === cat);
-      return category && !category.schedule?.enabled && !category.isPaused && !category.isSoldOut;
-    });
-    
-    if (!hasActiveNonScheduledCategory) {
-      unavailableItems.push({ name: menuItem.name, reason: 'category_paused' });
-    }
-  }
-  
-  return {
-    available: unavailableItems.length === 0,
-    unavailableItems
-  };
 };
 
 // Helper to send message with optional image
@@ -3393,43 +3218,7 @@ const chatbot = {
       : null;
   },
 
-  // Helper to filter items by food type preference
-  filterByFoodType(menuItems, preference) {
-    if (preference === 'both') return menuItems;
-    if (preference === 'veg') return menuItems.filter(item => item.foodType === 'veg');
-    if (preference === 'egg') return menuItems.filter(item => item.foodType === 'egg');
-    if (preference === 'nonveg') return menuItems.filter(item => item.foodType === 'nonveg' || item.foodType === 'egg');
-    return menuItems;
-  },
-
-  // Reverse geocode coordinates to get readable address
-  async reverseGeocode(latitude, longitude) {
-    try {
-      const response = await axios.get(
-        `https://nominatim.openstreetmap.org/reverse?format=json&lat=${latitude}&lon=${longitude}&addressdetails=1`,
-        { headers: { 'User-Agent': 'RestaurantBot/1.0' } }
-      );
-      
-      if (response.data && response.data.address) {
-        const addr = response.data.address;
-        // Build a readable address
-        const parts = [];
-        if (addr.house_number) parts.push(addr.house_number);
-        if (addr.road) parts.push(addr.road);
-        if (addr.neighbourhood || addr.suburb) parts.push(addr.neighbourhood || addr.suburb);
-        if (addr.city || addr.town || addr.village) parts.push(addr.city || addr.town || addr.village);
-        if (addr.state) parts.push(addr.state);
-        if (addr.postcode) parts.push(addr.postcode);
-        
-        return parts.length > 0 ? parts.join(', ') : response.data.display_name || 'Location shared';
-      }
-      return 'Location shared';
-    } catch (error) {
-      console.error('Reverse geocoding error:', error.message);
-      return 'Location shared';
-    }
-  },
-
+  // ============ ORDERING ============
   async handleMessage(phone, message, messageType = 'text', selectedId = null, senderName = null) {
     // Check if holiday mode is enabled
     const holidayMode = await Settings.getValue('holidayMode', false);
@@ -3527,107 +3316,21 @@ const chatbot = {
       console.log(`❌ Filtered out: [${filteredOutItems.map(i => i.name).join(', ')}]`);
     }
     
-    const state = customer.conversationState || { currentStep: 'welcome' };
+    const state = await conversationState.getState(null, { phone });
     
     // Handle message - could be string or object (for location)
     const msg = typeof message === 'string' ? message.toLowerCase().trim() : '';
     const selection = selectedId || msg;
 
-    console.log('🤖 Chatbot:', { phone, msg, selection, messageType, currentStep: state.currentStep });
+    const currentState = await conversationState.getState(null, { phone });
+    console.log('🤖 Chatbot:', { phone, msg, selection, messageType, currentStep: currentState.currentStep });
 
     try {
       // ========== HANDLE LOCATION MESSAGE ==========
       if (messageType === 'location') {
-        // message contains location data: { latitude, longitude, name, address }
-        const locationData = typeof message === 'object' ? message : {};
-        
-        console.log('📍 Location received:', locationData);
-        
-        // Get proper address from coordinates using reverse geocoding
-        let formattedAddress = 'Location shared';
-        if (locationData.latitude && locationData.longitude) {
-          formattedAddress = await this.reverseGeocode(locationData.latitude, locationData.longitude);
-        }
-        
-        // Check delivery radius BEFORE saving location
-        if (locationData.latitude && locationData.longitude && customer.cart?.length > 0) {
-          const deliveryResult = await calculateDeliveryCharge(locationData.latitude, locationData.longitude);
-          
-          // If beyond max delivery radius, reject the order
-          if (deliveryResult.beyondMaxRadius) {
-            const outOfRangeImg = await chatbotImagesService.getImageUrl('out_of_delivery_range');
-            const message = `❌ *Delivery Not Available*\n\n${deliveryResult.message}\n\nWould you like to try a different address or opt for self-pickup?`;
-            
-            if (outOfRangeImg) {
-              await whatsapp.sendImageWithButtons(phone, outOfRangeImg, message, [
-                { id: 'service_pickup', text: '🏪 Self-Pickup' },
-                { id: 'share_location', text: '📍 New Location' },
-                { id: 'home', text: '🏠 Main Menu' }
-              ]);
-            } else {
-              await whatsapp.sendButtons(phone, message, [
-                { id: 'service_pickup', text: '🏪 Self-Pickup' },
-                { id: 'share_location', text: '📍 New Location' },
-                { id: 'home', text: '🏠 Main Menu' }
-              ]);
-            }
-            state.currentStep = 'awaiting_location';
-            customer.conversationState = state;
-            await customer.save();
-            return;
-          }
-          
-          // If delivery not available (outside free radius and extra charge not enabled)
-          if (deliveryResult.deliveryNotAvailable) {
-            const outOfRangeImg = await chatbotImagesService.getImageUrl('out_of_delivery_range');
-            const message = `❌ *Delivery Not Available*\n\n${deliveryResult.message}\n\nWould you like to try a different address or opt for self-pickup?`;
-            
-            if (outOfRangeImg) {
-              await whatsapp.sendImageWithButtons(phone, outOfRangeImg, message, [
-                { id: 'service_pickup', text: '🏪 Self-Pickup' },
-                { id: 'share_location', text: '📍 New Location' },
-                { id: 'home', text: '🏠 Main Menu' }
-              ]);
-            } else {
-              await whatsapp.sendButtons(phone, message, [
-                { id: 'service_pickup', text: '🏪 Self-Pickup' },
-                { id: 'share_location', text: '📍 New Location' },
-                { id: 'home', text: '🏠 Main Menu' }
-              ]);
-            }
-            state.currentStep = 'awaiting_location';
-            customer.conversationState = state;
-            await customer.save();
-            return;
-          }
-          
-          // Store delivery charge info in customer state for later use
-          state.deliveryCharge = deliveryResult.charge || 0;
-          state.deliveryDistance = deliveryResult.distance;
-        }
-        
-        customer.deliveryAddress = {
-          latitude: locationData.latitude,
-          longitude: locationData.longitude,
-          address: formattedAddress,
-          updatedAt: new Date()
-        };
-        await customer.save();
-        
-        // If customer has items in cart, show order summary with payment options
-        if (customer.cart?.length > 0) {
-          await this.sendPaymentMethodOptions(phone, customer, state);
-          state.currentStep = 'select_payment_method';
-        } else {
-          // No cart items, just confirm location saved
-          await whatsapp.sendButtons(phone, 
-            `📍 Location saved!\n\n${formattedAddress}\n\nStart ordering to use this address.`,
-            [
-              { id: 'place_order', text: 'Start Order' },
-              { id: 'home', text: 'Main Menu' }
-            ]
-          );
-          state.currentStep = 'main_menu';
+        const locationResult = await locationHandler.handleLocationMessage(phone, message, customer, state);
+        if (locationResult.shouldReturn) {
+          return;
         }
       }
       // ========== WEBSITE CART ORDER (multiple items from website cart) ==========
@@ -3642,9 +3345,8 @@ const chatbot = {
         let notFoundItems = [];
         
         for (const cartItem of cartOrder.items) {
-          // Find exact match for each item
           const menuItem = menuItems.find(m => 
-            m.name.toLowerCase().trim() === cartItem.name.toLowerCase().trim()
+            m.name.toLowerCase() === cartItem.name.toLowerCase()
           );
           
           if (menuItem) {
@@ -3671,8 +3373,7 @@ const chatbot = {
         
         if (addedCount > 0) {
           // Show cart summary and proceed to checkout
-          await this.sendCart(phone, customer);
-          state.currentStep = 'viewing_cart';
+          await cartHandler.handleViewCart({ phone, customer });
         } else {
           // No items were added
           await whatsapp.sendButtons(phone, 
@@ -3682,7 +3383,7 @@ const chatbot = {
               { id: 'home', text: 'Main Menu' }
             ]
           );
-          state.currentStep = 'main_menu';
+          await conversationState.setState(null, { currentStep: 'main_menu' }, { phone });
         }
       }
       // ========== WEBSITE ORDER DETECTION (exact match on item name) ==========
@@ -3700,11 +3401,11 @@ const chatbot = {
         if (exactMatch) {
           // Found exact match - show item details with Add to Cart option
           console.log('✅ Exact match found:', exactMatch.name);
-          state.selectedItem = exactMatch._id.toString();
-          customer.conversationState = state;
-          await customer.save();
+          await conversationState.setState(null, { 
+            selectedItem: exactMatch._id.toString(),
+            currentStep: 'viewing_item_details'
+          }, { phone });
           await this.sendItemDetailsForOrder(phone, exactMatch);
-          state.currentStep = 'viewing_item_details';
         } else {
           // No exact match - try to find items that START with the search term
           // This prevents "Chicken" from matching "Gongura Chicken"
@@ -3724,11 +3425,11 @@ const chatbot = {
             // Single partial match - show item details
             const item = partialMatches[0];
             console.log('✅ Single partial match found:', item.name);
-            state.selectedItem = item._id.toString();
-            customer.conversationState = state;
-            await customer.save();
+            await conversationState.setState(null, { 
+              selectedItem: item._id.toString(),
+              currentStep: 'viewing_item_details'
+            }, { phone });
             await this.sendItemDetailsForOrder(phone, item);
-            state.currentStep = 'viewing_item_details';
           } else if (partialMatches.length > 1) {
             // Multiple matches - show options as list
             console.log('⚠️ Multiple matches found:', partialMatches.map(i => i.name));
@@ -3741,7 +3442,7 @@ const chatbot = {
               }))
             }];
             await whatsapp.sendList(phone, '🔍 Select Item', `Found ${partialMatches.length} items. Please select one:`, 'View Items', sections, 'Tap to view details');
-            state.currentStep = 'select_item';
+            await conversationState.setState(null, { currentStep: 'select_item' }, { phone });
           } else {
             // No match found
             console.log('❌ No match found for:', websiteOrder.itemName);
@@ -3750,7 +3451,7 @@ const chatbot = {
               { id: 'view_menu', text: 'View Menu' },
               { id: 'home', text: 'Main Menu' }
             ]);
-            state.currentStep = 'main_menu';
+            await conversationState.setState(null, { currentStep: 'main_menu' }, { phone });
           }
         }
       }
@@ -3758,51 +3459,32 @@ const chatbot = {
       // Greeting patterns - support common variations with extra letters (hi, hii, hiii, hey, heyyy, etc.)
       else if (/^h+i+$/i.test(msg) || /^h+e+y+$/i.test(msg) || /^h+e+l+o+$/i.test(msg) || msg === 'hello' || msg === 'start' || msg === 'hai' || msg === 'hlo' || msg === 'helo') {
         await this.sendWelcome(phone);
-        state.currentStep = 'main_menu';
+        await conversationState.setState(null, { currentStep: 'main_menu' }, { phone });
       }
       else if (selection === 'home' || selection === 'back' || msg === 'home' || msg === 'back') {
         await this.sendWelcome(phone);
-        state.currentStep = 'main_menu';
+        await conversationState.setState(null, { currentStep: 'main_menu' }, { phone });
       }
       // ========== CART COMMANDS (check CLEAR first, then VIEW - order matters!) ==========
       // Clear cart must be checked BEFORE view cart because "clear my cart" contains "my cart"
       else if (selection === 'clear_cart' || (!selectedId && this.isClearCartIntent(msg))) {
-        const itemCount = customer.cart?.length || 0;
-        customer.cart = [];
-        await customer.save();
-        
-        const cartClearedImageUrl = await chatbotImagesService.getImageUrl('cart_cleared');
-        
-        let message = '🗑️ *Cart Cleared Successfully!*\n\n';
-        if (itemCount > 0) {
-          message += `✅ Removed ${itemCount} item${itemCount > 1 ? 's' : ''} from your cart.\n\n`;
-        }
-        message += `🛒 Your cart is now empty and ready for a fresh start!\n\n`;
-        message += `🍽️ Browse our delicious menu and discover your favorites! 😋`;
-        
-        await sendWithOptionalImage(phone, cartClearedImageUrl, message, [
-          { id: 'view_menu', text: '📋 View Menu' },
-          { id: 'home', text: '🏠 Main Menu' }
-        ]);
-        state.currentStep = 'main_menu';
+        await cartHandler.handleClearCart({ phone, customer });
       }
       else if (selection === 'view_cart') {
-        await this.sendCart(phone, customer);
-        state.currentStep = 'viewing_cart';
+        await cartHandler.handleViewCart({ phone, customer });
       }
       // Handle simple cart keyword (just "cart") - show cart options menu
       else if (!selectedId && this.isSimpleCartKeyword(msg)) {
-        await this.sendCartOptionsMenu(phone);
-        state.currentStep = 'cart_options';
+        await cartHandler.handleCartOptionsMenu({ phone });
+        await conversationState.setState(null, { currentStep: 'cart_options' }, { phone });
       }
       // Handle full cart intent ("view cart", "my cart", etc.) - show cart directly
       else if (!selectedId && this.isCartIntent(msg)) {
-        await this.sendCart(phone, customer);
-        state.currentStep = 'viewing_cart';
+        await cartHandler.handleViewCart({ phone, customer });
       }
       else if (selection === 'view_menu' || msg === 'menu') {
-        await this.sendFoodTypeSelection(phone);
-        state.currentStep = 'select_food_type';
+        await menuHandler.handleFoodTypeSelection(phone);
+        await conversationState.setState(null, { currentStep: 'select_food_type' }, { phone });
       }
       // Handle text/voice menu intent with food type detection (only for text messages, not button clicks)
       else if (!selectedId && this.isShowMenuIntent(msg)) {
@@ -3810,110 +3492,59 @@ const chatbot = {
         console.log('🍽️ Menu intent detected:', menuIntent);
         
         if (menuIntent.foodType === 'veg') {
-          state.foodTypePreference = 'veg';
-          const filteredItems = this.filterByFoodType(menuItems, 'veg');
-          if (filteredItems.length > 0) {
-            await this.sendMenuCategoriesWithLabel(phone, filteredItems, '🌿 Veg Menu');
-            state.currentStep = 'select_category';
-          } else {
-            await whatsapp.sendButtons(phone, '🌿 No veg items available right now.', [
-              { id: 'view_menu', text: 'View All Menu' },
-              { id: 'home', text: 'Main Menu' }
-            ]);
-            state.currentStep = 'main_menu';
-          }
+          await menuHandler.handleShowMenuCategories(phone, menuItems, 'veg', '🌿 Veg Menu');
         } else if (menuIntent.foodType === 'egg') {
-          state.foodTypePreference = 'egg';
-          const filteredItems = this.filterByFoodType(menuItems, 'egg');
-          if (filteredItems.length > 0) {
-            await this.sendMenuCategoriesWithLabel(phone, filteredItems, '🥚 Egg Menu');
-            state.currentStep = 'select_category';
-          } else {
-            await whatsapp.sendButtons(phone, '🥚 No egg items available right now.', [
-              { id: 'view_menu', text: 'View All Menu' },
-              { id: 'home', text: 'Main Menu' }
-            ]);
-            state.currentStep = 'main_menu';
-          }
+          await menuHandler.handleShowMenuCategories(phone, menuItems, 'egg', '🥚 Egg Menu');
         } else if (menuIntent.foodType === 'nonveg') {
-          state.foodTypePreference = 'nonveg';
-          const filteredItems = this.filterByFoodType(menuItems, 'nonveg');
-          if (filteredItems.length > 0) {
-            await this.sendMenuCategoriesWithLabel(phone, filteredItems, '🍗 Non-Veg Menu');
-            state.currentStep = 'select_category';
-          } else {
-            await whatsapp.sendButtons(phone, '🍗 No non-veg items available right now.', [
-              { id: 'view_menu', text: 'View All Menu' },
-              { id: 'home', text: 'Main Menu' }
-            ]);
-            state.currentStep = 'main_menu';
-          }
+          await menuHandler.handleShowMenuCategories(phone, menuItems, 'nonveg', '🍗 Non-Veg Menu');
         } else {
           // Show food type selection (Browse Menu screen with Veg/Non-Veg/All options)
-          await this.sendFoodTypeSelection(phone);
-          state.currentStep = 'select_food_type';
+          await menuHandler.handleFoodTypeSelection(phone);
+          await conversationState.setState(null, { currentStep: 'select_food_type' }, { phone });
         }
       }
       else if (selection === 'food_veg' || selection === 'food_nonveg' || selection === 'food_both') {
-        state.foodTypePreference = selection.replace('food_', '');
-        console.log('🍽️ Food type selected:', state.foodTypePreference);
-        const filteredItems = this.filterByFoodType(menuItems, state.foodTypePreference);
-        
-        const foodTypeLabels = {
-          veg: '🌿 Veg Menu',
-          nonveg: '🍗 Non-Veg Menu',
-          both: '🍽️ All Menu'
-        };
-        
-        // If coming from order flow, show menu for ordering; otherwise show browse menu
-        if (state.currentStep === 'select_food_type_order') {
-          await this.sendMenuForOrderWithLabel(phone, filteredItems, foodTypeLabels[state.foodTypePreference]);
-          state.currentStep = 'browsing_menu';
-        } else {
-          await this.sendMenuCategoriesWithLabel(phone, filteredItems, foodTypeLabels[state.foodTypePreference]);
-          state.currentStep = 'select_category';
-        }
+        await menuHandler.handleFoodTypeSelectionResponse(phone, menuItems, selection);
       }
       else if (selection === 'place_order' || selection === 'order_now' || (!selectedId && msg === 'order')) {
-        // Skip service type selection and go directly to food type selection
-        await this.sendFoodTypeSelection(phone);
-        state.currentStep = 'select_food_type_order';
+        // Handle place order intent through orderHandler
+        await orderHandler.handlePlaceOrderIntent(phone, menuItems);
       }
       // Check cancel/refund/track BEFORE order status (they're more specific)
       // Only check text-based intents when there's no selectedId (button click)
       else if (selection === 'cancel_order' || (!selectedId && this.isCancelIntent(msg))) {
         await this.sendCancelOptions(phone);
-        state.currentStep = 'select_cancel';
+        await conversationState.setState(null, { currentStep: 'select_cancel' }, { phone });
       }
       else if (selection === 'request_refund' || (!selectedId && this.isRefundIntent(msg))) {
         await this.sendRefundOptions(phone);
-        state.currentStep = 'select_refund';
+        await conversationState.setState(null, { currentStep: 'select_refund' }, { phone });
       }
       else if (selection === 'track_order' || (!selectedId && (msg === 'track' || this.isTrackIntent(msg)))) {
         await this.sendTrackingOptions(phone);
-        state.currentStep = 'select_track';
+        await conversationState.setState(null, { currentStep: 'select_track' }, { phone });
       }
       else if (selection === 'order_status' || (!selectedId && (msg === 'status' || this.isOrderStatusIntent(msg)))) {
         await this.sendOrderStatus(phone);
-        state.currentStep = 'main_menu';
+        await conversationState.setState(null, { currentStep: 'main_menu' }, { phone });
       }
       else if (selection === 'help' || (!selectedId && msg === 'help')) {
         await this.sendHelp(phone);
-        state.currentStep = 'main_menu';
+        await conversationState.setState(null, { currentStep: 'main_menu' }, { phone });
       }
       else if (selection === 'open_website') {
         await this.sendWebsiteLink(phone);
-        state.currentStep = 'main_menu';
+        await conversationState.setState(null, { currentStep: 'main_menu' }, { phone });
       }
       // ========== ORDER FOOD BUTTON (from welcome message) ==========
       else if (selection === 'order_food') {
-        await this.sendOrderFoodMenu(phone);
-        state.currentStep = 'select_food_type_order';
+        await menuHandler.handleFoodTypeSelection(phone);
+        await conversationState.setState(null, { currentStep: 'select_food_type_order' }, { phone });
       }
       // ========== MY ORDERS BUTTON (from welcome message) ==========
       else if (selection === 'my_orders') {
         await this.sendMyOrdersMenu(phone);
-        state.currentStep = 'main_menu';
+        await conversationState.setState(null, { currentStep: 'main_menu' }, { phone });
       }
       // ========== TEXT-BASED ADD TO CART (e.g., "add biryani to cart") ==========
       else if (!selectedId && this.isAddToCartIntent(msg)) {
@@ -3930,17 +3561,8 @@ const chatbot = {
         if (matchingItems.length === 1) {
           // Exact match - add to cart with qty 1
           const item = matchingItems[0];
-          customer.cart = customer.cart || [];
-          const existingIndex = customer.cart.findIndex(c => c.menuItem?.toString() === item._id.toString());
-          if (existingIndex >= 0) {
-            customer.cart[existingIndex].quantity += 1;
-            customer.cart[existingIndex].addedAt = new Date(); // Update timestamp when quantity changes
-          } else {
-            customer.cart.push({ menuItem: item._id, quantity: 1, addedAt: new Date() });
-          }
-          await customer.save();
-          await this.sendAddedToCart(phone, item, 1, customer.cart);
-          state.currentStep = 'item_added';
+          await cartHandler.handleAddToCart({ phone, customer, item, quantity: 1 });
+          await conversationState.setState(null, { currentStep: 'item_added' }, { phone });
         } else if (matchingItems.length > 1) {
           // Multiple matches - show options
           const sections = [{
@@ -3952,49 +3574,39 @@ const chatbot = {
             }))
           }];
           await whatsapp.sendList(phone, '🔍 Multiple Items Found', `Found ${matchingItems.length} items matching "${addIntent.itemName}"`, 'Select Item', sections, 'Tap to add to cart');
-          state.currentStep = 'select_item';
+          await conversationState.setState(null, { currentStep: 'select_item' }, { phone });
         } else {
           // No match found
           await whatsapp.sendButtons(phone, `❌ No items found matching "${addIntent.itemName}"\n\nTry browsing our menu!`, [
             { id: 'view_menu', text: 'View Menu' },
             { id: 'home', text: 'Main Menu' }
           ]);
-          state.currentStep = 'main_menu';
+          await conversationState.setState(null, { currentStep: 'main_menu' }, { phone });
         }
       }
       else if (selection === 'checkout' || selection === 'review_pay') {
         // If user has a selected item they're viewing (but hasn't added it yet), add it to cart with qty 1
         // Only add if user is on 'viewing_item_details' step - otherwise item was already added via quantity selection
-        if (state.selectedItem && state.currentStep === 'viewing_item_details') {
-          const item = menuItems.find(m => m._id.toString() === state.selectedItem);
+        const currentState = await conversationState.getState(null, { phone });
+        if (currentState.selectedItem && currentState.currentStep === 'viewing_item_details') {
+          const item = menuItems.find(m => m._id.toString() === currentState.selectedItem);
           if (item) {
-            // Check if item already in cart
-            const existingIndex = customer.cart?.findIndex(c => c.menuItem.toString() === state.selectedItem);
-            if (existingIndex >= 0) {
-              // Item already in cart, increment quantity
-              customer.cart[existingIndex].quantity += 1;
-              customer.cart[existingIndex].addedAt = new Date(); // Update timestamp when quantity changes
-            } else {
-              // Add new item to cart
-              if (!customer.cart) customer.cart = [];
-              customer.cart.push({ menuItem: item._id, quantity: 1, addedAt: new Date() });
-            }
-            await customer.save();
+            await cartHandler.handleAddToCart({ phone, customer, item, quantity: 1 });
             console.log(`✅ Added ${item.name} to cart before checkout`);
           }
         }
         // Clear selectedItem to prevent duplicate additions on subsequent review_pay clicks
-        state.selectedItem = null;
+        await conversationState.setState(null, { selectedItem: null }, { phone });
         
         if (!customer.cart?.length) {
           await whatsapp.sendButtons(phone, 'Your cart is empty! Please add items first.', [
             { id: 'view_menu', text: 'View Menu' },
             { id: 'home', text: 'Main Menu' }
           ]);
-          state.currentStep = 'main_menu';
+          await conversationState.setState(null, { currentStep: 'main_menu' }, { phone });
         } else {
           // Check if cart items are still available
-          const availabilityCheck = await checkCartAvailability(customer.cart);
+          const availabilityCheck = await cartHandler.checkCartAvailability(customer.cart);
           
           if (!availabilityCheck.available) {
             // Some items are unavailable - notify user
@@ -4008,30 +3620,30 @@ const chatbot = {
               { id: 'clear_cart', text: 'Clear Cart' },
               { id: 'home', text: 'Main Menu' }
             ]);
-            state.currentStep = 'viewing_cart';
+            await conversationState.setState(null, { currentStep: 'viewing_cart' }, { phone });
           } else {
             // All items available - ask for service type (Delivery or Self-Pickup)
-            await this.sendServiceTypeSelection(phone);
-            state.currentStep = 'select_service_type';
+            await locationHandler.handleServiceTypeSelection(phone);
+            await conversationState.setState(null, { currentStep: 'select_service_type' }, { phone });
           }
         }
       }
       else if (selection === 'service_delivery') {
         // Customer chose delivery service - proceed to location
-        state.serviceType = 'delivery';
-        await this.requestLocation(phone);
-        state.currentStep = 'awaiting_location';
+        await conversationState.setState(null, { serviceType: 'delivery' }, { phone });
+        await locationHandler.handleAddressCapture(phone);
+        await conversationState.setState(null, { currentStep: 'awaiting_location' }, { phone });
       }
       else if (selection === 'service_pickup') {
         // Customer chose self-pickup - skip location, go to payment method
-        state.serviceType = 'pickup';
+        await conversationState.setState(null, { serviceType: 'pickup' }, { phone });
         customer.deliveryAddress = {
           address: 'Self-Pickup at Restaurant',
           updatedAt: new Date()
         };
         await customer.save();
-        await this.sendPickupPaymentMethodOptions(phone, customer);
-        state.currentStep = 'select_pickup_payment_method';
+        await paymentInitiationHandler.handleSelectPickupPaymentMethod(phone, customer);
+        await conversationState.setState(null, { currentStep: 'select_pickup_payment_method' }, { phone });
       }
       else if (selection === 'share_location') {
         // User tapped share location button - remind them to share
@@ -4042,7 +3654,7 @@ const chatbot = {
           `3️⃣ Send your current location\n\n` +
           `We're waiting for your location! 🛵`
         );
-        state.currentStep = 'awaiting_location';
+        await conversationState.setState(null, { currentStep: 'awaiting_location' }, { phone });
       }
       else if (selection === 'skip_location') {
         // Skip location - proceed to payment without address
@@ -4051,15 +3663,15 @@ const chatbot = {
           updatedAt: new Date()
         };
         await customer.save();
-        await this.sendPaymentMethodOptions(phone, customer);
-        state.currentStep = 'select_payment_method';
+        await orderHandler.handleOrderSummary(phone, customer);
+        await conversationState.setState(null, { currentStep: 'select_payment_method' }, { phone });
       }
       else if (selection === 'pay_upi') {
         if (!customer.cart?.length) {
           await whatsapp.sendButtons(phone, '🛒 Your cart is empty!', [
             { id: 'view_menu', text: 'View Menu' }
           ]);
-          state.currentStep = 'main_menu';
+          await conversationState.setState(null, { currentStep: 'main_menu' }, { phone });
         } else {
           // Check if cart items are still available before payment
           const availabilityCheck = await checkCartAvailability(customer.cart);
@@ -4075,11 +3687,16 @@ const chatbot = {
               { id: 'clear_cart', text: 'Clear Cart' },
               { id: 'home', text: 'Main Menu' }
             ]);
-            state.currentStep = 'viewing_cart';
+            await conversationState.setState(null, { currentStep: 'viewing_cart' }, { phone });
           } else {
-            state.paymentMethod = 'upi';
-            const result = await this.processCheckout(phone, customer, state);
-            if (result.success) state.currentStep = 'awaiting_payment';
+            await conversationState.setState(null, { paymentMethod: 'upi' }, { phone });
+            const result = await orderHandler.handleOrderConfirmation(phone, customer, state);
+            if (result.success) {
+              // Continue with payment logic using the returned order data
+              // Payment processing remains in chatbot.js
+              await paymentInitiationHandler.handleInitiateOnlinePayment(phone, customer, state, result);
+              if (result.success) await conversationState.setState(null, { currentStep: 'awaiting_payment' }, { phone });
+            }
           }
         }
       }
@@ -4088,7 +3705,7 @@ const chatbot = {
           await whatsapp.sendButtons(phone, '🛒 Your cart is empty!', [
             { id: 'view_menu', text: 'View Menu' }
           ]);
-          state.currentStep = 'main_menu';
+          await conversationState.setState(null, { currentStep: 'main_menu' }, { phone });
         } else {
           // Check if cart items are still available before COD order
           const availabilityCheck = await checkCartAvailability(customer.cart);
@@ -4104,11 +3721,11 @@ const chatbot = {
               { id: 'clear_cart', text: 'Clear Cart' },
               { id: 'home', text: 'Main Menu' }
             ]);
-            state.currentStep = 'viewing_cart';
+            await conversationState.setState(null, { currentStep: 'viewing_cart' }, { phone });
           } else {
-            state.paymentMethod = 'cod';
-            const result = await this.processCODOrder(phone, customer, state);
-            if (result.success) state.currentStep = 'order_confirmed';
+            await conversationState.setState(null, { paymentMethod: 'cod' }, { phone });
+            const result = await paymentInitiationHandler.handleInitiateCOD(phone, customer, state);
+            if (result.success) await conversationState.setState(null, { currentStep: 'order_confirmed' }, { phone });
           }
         }
       }
@@ -4118,12 +3735,11 @@ const chatbot = {
           await whatsapp.sendButtons(phone, '🛒 Your cart is empty!', [
             { id: 'view_menu', text: 'View Menu' }
           ]);
-          state.currentStep = 'main_menu';
+          await conversationState.setState(null, { currentStep: 'main_menu' }, { phone });
         } else {
-          state.paymentMethod = 'cod'; // Use COD for at-hotel payment
-          state.serviceType = 'pickup';
-          const result = await this.processPickupCheckout(phone, customer, state);
-          if (result.success) state.currentStep = 'order_placed';
+          await conversationState.setState(null, { paymentMethod: 'cod', serviceType: 'pickup' }, { phone });
+          const result = await orderHandler.processPickupCheckout(phone, customer, state);
+          if (result.success) await conversationState.setState(null, { currentStep: 'order_placed' }, { phone });
         }
       }
       else if (selection === 'pickup_pay_upi') {
@@ -4132,7 +3748,7 @@ const chatbot = {
           await whatsapp.sendButtons(phone, '🛒 Your cart is empty!', [
             { id: 'view_menu', text: 'View Menu' }
           ]);
-          state.currentStep = 'main_menu';
+          await conversationState.setState(null, { currentStep: 'main_menu' }, { phone });
         } else {
           // Check if cart items are still available before payment
           const availabilityCheck = await checkCartAvailability(customer.cart);
@@ -4148,12 +3764,16 @@ const chatbot = {
               { id: 'clear_cart', text: 'Clear Cart' },
               { id: 'home', text: 'Main Menu' }
             ]);
-            state.currentStep = 'viewing_cart';
+            await conversationState.setState(null, { currentStep: 'viewing_cart' }, { phone });
           } else {
-            state.paymentMethod = 'upi';
-            state.serviceType = 'pickup';
-            const result = await this.processCheckout(phone, customer, state);
-            if (result.success) state.currentStep = 'awaiting_payment';
+            await conversationState.setState(null, { paymentMethod: 'upi', serviceType: 'pickup' }, { phone });
+            const result = await orderHandler.handleOrderConfirmation(phone, customer, state);
+            if (result.success) {
+              // Continue with payment logic using the returned order data
+              // Payment processing remains in chatbot.js
+              await paymentInitiationHandler.handleInitiateOnlinePayment(phone, customer, state, result);
+              if (result.success) await conversationState.setState(null, { currentStep: 'awaiting_payment' }, { phone });
+            }
           }
         }
       }
@@ -4162,10 +3782,15 @@ const chatbot = {
           await whatsapp.sendButtons(phone, '🛒 Your cart is empty!', [
             { id: 'view_menu', text: 'View Menu' }
           ]);
-          state.currentStep = 'main_menu';
+          await conversationState.setState(null, { currentStep: 'main_menu' }, { phone });
         } else {
-          const result = await this.processCheckout(phone, customer, state);
-          if (result.success) state.currentStep = 'awaiting_payment';
+          const result = await orderHandler.handleOrderConfirmation(phone, customer, state);
+          if (result.success) {
+            // Continue with payment logic using the returned order data
+            // Payment processing remains in chatbot.js
+            await paymentInitiationHandler.handleInitiateOnlinePayment(phone, customer, state, result);
+            if (result.success) await conversationState.setState(null, { currentStep: 'awaiting_payment' }, { phone });
+          }
         }
       }
       else if (selection === 'add_more') {
@@ -4178,107 +3803,45 @@ const chatbot = {
             { id: 'food_both', text: 'All Items' }
           ]
         );
-        state.currentStep = 'select_food_type_order';
+        await conversationState.setState(null, { currentStep: 'select_food_type_order' }, { phone });
       }
 
       // ========== CATEGORY SELECTION ==========
-      else if (selection === 'cat_all') {
-        // Show all items from all categories (within selected food type)
-        const preference = state.foodTypePreference || 'both';
-        const filteredItems = this.filterByFoodType(menuItems, preference);
-        console.log('🍽️ All items selected - Food preference:', preference, 'Total items:', filteredItems.length);
-        await this.sendAllItems(phone, filteredItems);
-        state.selectedCategory = 'all';
-        state.currentStep = 'viewing_items';
+      else if (selection === 'cat_all' || selection.startsWith('cat_')) {
+        await menuHandler.handleCategorySelection(phone, menuItems, selection);
       }
-      else if (selection.startsWith('cat_')) {
-        const sanitizedCat = selection.replace('cat_', '');
-        const preference = state.foodTypePreference || 'both';
-        const filteredItems = this.filterByFoodType(menuItems, preference);
-        // Find original category name from sanitized ID
-        const allCategories = [...new Set(filteredItems.flatMap(m => Array.isArray(m.category) ? m.category : [m.category]))];
-        const category = allCategories.find(c => c.replace(/[^a-zA-Z0-9_]/g, '_') === sanitizedCat) || sanitizedCat;
-        console.log('🍽️ Category selection - Food preference:', preference, 'Category:', category);
-        console.log('🍽️ After filter - Items:', filteredItems.length, 'In category:', filteredItems.filter(m => Array.isArray(m.category) ? m.category.includes(category) : m.category === category).length);
-        await this.sendCategoryItems(phone, filteredItems, category);
-        state.selectedCategory = category;
-        state.currentStep = 'viewing_items';
-      }
-      else if (selection === 'order_cat_all') {
-        // Show all items for ordering (within selected food type)
-        const filteredItems = this.filterByFoodType(menuItems, state.foodTypePreference || 'both');
-        console.log('🍽️ All items for order - Total items:', filteredItems.length);
-        await this.sendAllItemsForOrder(phone, filteredItems);
-        state.selectedCategory = 'all';
-        state.currentStep = 'selecting_item';
-      }
-      else if (selection.startsWith('order_cat_')) {
-        const sanitizedCat = selection.replace('order_cat_', '');
-        const filteredItems = this.filterByFoodType(menuItems, state.foodTypePreference || 'both');
-        // Find original category name from sanitized ID
-        const allCategories = [...new Set(filteredItems.flatMap(m => Array.isArray(m.category) ? m.category : [m.category]))];
-        const category = allCategories.find(c => c.replace(/[^a-zA-Z0-9_]/g, '_') === sanitizedCat) || sanitizedCat;
-        await this.sendItemsForOrder(phone, filteredItems, category);
-        state.selectedCategory = category;
-        state.currentStep = 'selecting_item';
+      else if (selection === 'order_cat_all' || selection.startsWith('order_cat_')) {
+        await menuHandler.handleCategorySelectionForOrder(phone, menuItems, selection);
       }
 
       // ========== PAGINATION HANDLERS ==========
-      // Category list pagination (for browsing)
-      else if (selection.startsWith('menucat_page_')) {
-        const page = parseInt(selection.replace('menucat_page_', ''));
-        const filteredItems = this.filterByFoodType(menuItems, state.foodTypePreference || 'both');
-        state.categoryPage = page;
-        await this.sendMenuCategories(phone, filteredItems, 'Our Menu', page);
-        state.currentStep = 'select_category';
+      // Menu pagination (for browsing and ordering)
+      else if (selection.startsWith('menucat_page_') || selection.startsWith('ordercat_page_') || selection.startsWith('allitems_page_')) {
+        await menuHandler.handleMenuPagination(phone, menuItems, selection);
       }
-      // Category list pagination (for ordering)
-      else if (selection.startsWith('ordercat_page_')) {
-        const page = parseInt(selection.replace('ordercat_page_', ''));
-        const filteredItems = this.filterByFoodType(menuItems, state.foodTypePreference || 'both');
-        state.categoryPage = page;
-        await this.sendMenuForOrder(phone, filteredItems, 'Select Items', page);
-        state.currentStep = 'browsing_menu';
-      }
-      // All items pagination (for browsing)
-      else if (selection.startsWith('allitems_page_')) {
-        const page = parseInt(selection.replace('allitems_page_', ''));
-        const filteredItems = this.filterByFoodType(menuItems, state.foodTypePreference || 'both');
-        state.currentPage = page;
-        await this.sendAllItems(phone, filteredItems, page);
-        state.currentStep = 'viewing_items';
-      }
-      // All items pagination (for ordering)
-      else if (selection.startsWith('orderitems_page_')) {
-        const page = parseInt(selection.replace('orderitems_page_', ''));
-        const filteredItems = this.filterByFoodType(menuItems, state.foodTypePreference || 'both');
-        state.currentPage = page;
-        await this.sendAllItemsForOrder(phone, filteredItems, page);
-        state.currentStep = 'selecting_item';
-      }
+      // Category items pagination (for browsing)
       else if (selection.startsWith('catpage_')) {
         const parts = selection.replace('catpage_', '').split('_');
         const page = parseInt(parts.pop());
         const safeCat = parts.join('_');
-        const filteredItems = this.filterByFoodType(menuItems, state.foodTypePreference || 'both');
+        const currentState = await conversationState.getState(null, { phone });
+        const filteredItems = menuHandler.filterByFoodType(menuItems, currentState.foodTypePreference || 'both');
         const allCategories = [...new Set(filteredItems.flatMap(m => Array.isArray(m.category) ? m.category : [m.category]))];
         const category = allCategories.find(c => c.replace(/[^a-zA-Z0-9]/g, '_') === safeCat) || safeCat;
-        state.currentPage = page;
-        state.selectedCategory = category;
-        await this.sendCategoryItems(phone, filteredItems, category, page);
-        state.currentStep = 'viewing_items';
+        await conversationState.setState(null, { currentPage: page, selectedCategory: category, currentStep: 'viewing_items' }, { phone });
+        await menuHandler.sendCategoryItems(phone, filteredItems, category, page);
       }
+      // Category items pagination (for ordering)
       else if (selection.startsWith('ordercatpage_')) {
         const parts = selection.replace('ordercatpage_', '').split('_');
         const page = parseInt(parts.pop());
         const safeCat = parts.join('_');
-        const filteredItems = this.filterByFoodType(menuItems, state.foodTypePreference || 'both');
+        const currentState = await conversationState.getState(null, { phone });
+        const filteredItems = menuHandler.filterByFoodType(menuItems, currentState.foodTypePreference || 'both');
         const allCategories = [...new Set(filteredItems.flatMap(m => Array.isArray(m.category) ? m.category : [m.category]))];
         const category = allCategories.find(c => c.replace(/[^a-zA-Z0-9]/g, '_') === safeCat) || safeCat;
-        state.currentPage = page;
-        state.selectedCategory = category;
-        await this.sendItemsForOrder(phone, filteredItems, category, page);
-        state.currentStep = 'selecting_item';
+        await conversationState.setState(null, { currentPage: page, selectedCategory: category, currentStep: 'selecting_item' }, { phone });
+        await menuHandler.sendCategoryItemsForOrder(phone, filteredItems, category, page);
       }
       // Tag search pagination
       else if (selection.startsWith('tagpage_')) {
@@ -4286,35 +3849,31 @@ const chatbot = {
         const page = parseInt(parts.pop());
         const safeTag = parts.join('_');
         // Restore original search term from state or use safe version
-        const searchTerm = state.searchTag || safeTag.replace(/_/g, ' ');
+        const currentState = await conversationState.getState(null, { phone });
+        const searchTerm = currentState.searchTag || safeTag.replace(/_/g, ' ');
         const searchResult = await this.smartSearch(searchTerm, menuItems);
         const matchingItems = searchResult?.items || [];
-        state.currentPage = page;
         const displayLabel = searchResult?.label 
           ? (searchResult.searchTerm ? `${searchResult.label} "${searchResult.searchTerm}"` : searchResult.label)
           : (searchResult?.searchTerm ? `"${searchResult.searchTerm}"` : `"${searchTerm}"`);
+        await conversationState.setState(null, { currentPage: page, currentStep: 'viewing_tag_results' }, { phone });
         await this.sendItemsByTag(phone, matchingItems, displayLabel, page);
-        state.currentStep = 'viewing_tag_results';
       }
 
       // ========== ITEM SELECTION ==========
       else if (selection.startsWith('view_')) {
         const itemId = selection.replace('view_', '');
         await this.sendItemDetails(phone, menuItems, itemId);
-        state.selectedItem = itemId;
-        state.currentStep = 'viewing_item_details';
+        await conversationState.setState(null, { selectedItem: itemId, currentStep: 'viewing_item_details' }, { phone });
       }
       else if (selection.startsWith('add_')) {
         const itemId = selection.replace('add_', '');
         const item = menuItems.find(m => m._id.toString() === itemId);
         if (item) {
-          state.selectedItem = itemId;
-          // Save state immediately to ensure selectedItem persists
-          customer.conversationState = state;
-          await customer.save();
+          await conversationState.setState(null, { selectedItem: itemId }, { phone });
           // Go directly to quantity selection (skip showing item details again)
-          await this.sendQuantitySelection(phone, item);
-          state.currentStep = 'select_quantity';
+          await cartHandler.sendQuantitySelection(phone, item);
+          await conversationState.setState(null, { currentStep: 'select_quantity' }, { phone });
         } else {
           console.log('❌ Item not found for add_:', itemId);
           await whatsapp.sendButtons(phone,
@@ -4324,19 +3883,16 @@ const chatbot = {
               { id: 'home', text: 'Main Menu' }
             ]
           );
-          state.currentStep = 'main_menu';
+          await conversationState.setState(null, { currentStep: 'main_menu' }, { phone });
         }
       }
       else if (selection.startsWith('confirm_add_')) {
         const itemId = selection.replace('confirm_add_', '');
         const item = menuItems.find(m => m._id.toString() === itemId);
         if (item) {
-          state.selectedItem = itemId;
-          // Save state immediately to ensure selectedItem persists
-          customer.conversationState = state;
-          await customer.save();
-          await this.sendQuantitySelection(phone, item);
-          state.currentStep = 'select_quantity';
+          await conversationState.setState(null, { selectedItem: itemId }, { phone });
+          await cartHandler.sendQuantitySelection(phone, item);
+          await conversationState.setState(null, { currentStep: 'select_quantity' }, { phone });
         } else {
           console.log('❌ Item not found for confirm_add_:', itemId);
           await whatsapp.sendButtons(phone,
@@ -4346,37 +3902,25 @@ const chatbot = {
               { id: 'home', text: 'Main Menu' }
             ]
           );
-          state.currentStep = 'main_menu';
+          await conversationState.setState(null, { currentStep: 'main_menu' }, { phone });
         }
       }
 
       // ========== QUANTITY SELECTION ==========
       else if (selection.startsWith('qty_')) {
         const qty = parseInt(selection.replace('qty_', ''));
-        console.log('🛒 Quantity selected:', { qty, selectedItem: state.selectedItem });
+        const currentState = await conversationState.getState(null, { phone });
+        console.log('🛒 Quantity selected:', { qty, selectedItem: currentState.selectedItem });
         
-        const item = menuItems.find(m => m._id.toString() === state.selectedItem);
+        const item = menuItems.find(m => m._id.toString() === currentState.selectedItem);
         
-        if (item && qty > 0) {
-          customer.cart = customer.cart || [];
-          // Check if item already in cart
-          const existingIndex = customer.cart.findIndex(c => c.menuItem?.toString() === item._id.toString());
-          if (existingIndex >= 0) {
-            customer.cart[existingIndex].quantity += qty;
-            customer.cart[existingIndex].addedAt = new Date(); // Update timestamp when quantity changes
-          } else {
-            customer.cart.push({ menuItem: item._id, quantity: qty, addedAt: new Date() });
-          }
-          // Save cart immediately to persist the change
-          await customer.save();
-          console.log('🛒 Cart updated and saved:', customer.cart.length, 'items');
-          await this.sendAddedToCart(phone, item, qty, customer.cart);
+        if (item) {
+          await cartHandler.handleUpdateQuantity({ phone, customer, item, quantity: qty });
           // Clear selectedItem after successful cart addition to prevent duplicate additions
-          state.selectedItem = null;
-          state.currentStep = 'item_added';
+          await conversationState.setState(null, { selectedItem: null, currentStep: 'item_added' }, { phone });
         } else {
           // Item not found - maybe state was lost, show menu again
-          console.log('❌ Item not found for qty selection, selectedItem:', state.selectedItem);
+          console.log('❌ Item not found for qty selection, selectedItem:', currentState.selectedItem);
           await whatsapp.sendButtons(phone,
             '⚠️ Something went wrong. Please select an item again.',
             [
@@ -4385,18 +3929,18 @@ const chatbot = {
               { id: 'home', text: 'Main Menu' }
             ]
           );
-          state.currentStep = 'main_menu';
+          await conversationState.setState(null, { currentStep: 'main_menu' }, { phone });
         }
       }
 
       // ========== SERVICE TYPE SELECTION ==========
-      else if (state.currentStep === 'select_service') {
+      else if (currentState.currentStep === 'select_service') {
         const services = { 'delivery': 'delivery', 'pickup': 'pickup', 'dine_in': 'dine_in' };
         if (services[selection]) {
-          state.selectedService = services[selection];
+          await conversationState.setState(null, { selectedService: services[selection] }, { phone });
           // Ask for food type preference before showing menu
-          await this.sendFoodTypeSelection(phone);
-          state.currentStep = 'select_food_type_order';
+          await menuHandler.handleFoodTypeSelection(phone);
+          await conversationState.setState(null, { currentStep: 'select_food_type_order' }, { phone });
         }
       }
 
@@ -4404,98 +3948,95 @@ const chatbot = {
       else if (selection.startsWith('track_')) {
         const orderId = selection.replace('track_', '');
         await this.sendTrackingDetails(phone, orderId);
-        state.currentStep = 'main_menu';
+        await conversationState.setState(null, { currentStep: 'main_menu' }, { phone });
       }
 
       // ========== ORDER CANCELLATION ==========
       else if (selection.startsWith('cancel_')) {
         const orderId = selection.replace('cancel_', '');
         await this.processCancellation(phone, orderId);
-        state.currentStep = 'main_menu';
+        await conversationState.setState(null, { currentStep: 'main_menu' }, { phone });
       }
 
       // ========== REFUND ==========
       else if (selection.startsWith('refund_')) {
         const orderId = selection.replace('refund_', '');
         await this.processRefund(phone, orderId);
-        state.currentStep = 'main_menu';
+        await conversationState.setState(null, { currentStep: 'main_menu' }, { phone });
       }
 
       // ========== CART ITEM REMOVAL ==========
       else if (selection.startsWith('remove_')) {
         const index = parseInt(selection.replace('remove_', ''));
-        if (customer.cart && customer.cart[index]) {
-          customer.cart.splice(index, 1);
-          await this.sendCart(phone, customer);
-          state.currentStep = 'viewing_cart';
-        }
+        await cartHandler.handleRemoveFromCart({ phone, customer, index });
       }
 
       // ========== NUMBER SELECTION (for paginated categories) ==========
-      else if (/^\d+$/.test(msg) && (state.currentStep === 'select_category' || state.currentStep === 'browsing_menu')) {
-        const catNum = parseInt(msg);
-        const filteredItems = this.filterByFoodType(menuItems, state.foodTypePreference || 'both');
-        const categories = [...new Set(filteredItems.flatMap(m => Array.isArray(m.category) ? m.category : [m.category]))];
-        
-        if (catNum === 0) {
-          // "All Items" selected
-          if (state.currentStep === 'browsing_menu') {
-            await this.sendAllItemsForOrder(phone, filteredItems);
-            state.selectedCategory = 'all';
-            state.currentStep = 'selecting_item';
+      else if (/^\d+$/.test(msg)) {
+        const currentState = await conversationState.getState(null, { phone });
+        if (currentState.currentStep === 'select_category' || currentState.currentStep === 'browsing_menu') {
+          const catNum = parseInt(msg);
+          const filteredItems = menuHandler.filterByFoodType(menuItems, currentState.foodTypePreference || 'both');
+          const categories = [...new Set(filteredItems.flatMap(m => Array.isArray(m.category) ? m.category : [m.category]))];
+          
+          if (catNum === 0) {
+            // "All Items" selected
+            if (currentState.currentStep === 'browsing_menu') {
+              await menuHandler.sendAllItemsForOrder(phone, filteredItems);
+              await conversationState.setState(null, { selectedCategory: 'all', currentStep: 'selecting_item' }, { phone });
+            } else {
+              await menuHandler.sendAllItems(phone, filteredItems);
+              await conversationState.setState(null, { selectedCategory: 'all', currentStep: 'viewing_items' }, { phone });
+            }
+          } else if (catNum >= 1 && catNum <= categories.length) {
+            const category = categories[catNum - 1];
+            if (currentState.currentStep === 'browsing_menu') {
+              await menuHandler.sendCategoryItemsForOrder(phone, filteredItems, category);
+              await conversationState.setState(null, { selectedCategory: category, currentStep: 'selecting_item' }, { phone });
+            } else {
+              await menuHandler.sendCategoryItems(phone, filteredItems, category);
+              await conversationState.setState(null, { selectedCategory: category, currentStep: 'viewing_items' }, { phone });
+            }
           } else {
-            await this.sendAllItems(phone, filteredItems);
-            state.selectedCategory = 'all';
-            state.currentStep = 'viewing_items';
+            await whatsapp.sendButtons(phone, `❌ Invalid number. Please enter 0 for All Items or 1-${categories.length} for a category.`, [
+              { id: 'home', text: 'Main Menu' }
+            ]);
           }
-        } else if (catNum >= 1 && catNum <= categories.length) {
-          const category = categories[catNum - 1];
-          if (state.currentStep === 'browsing_menu') {
-            await this.sendItemsForOrder(phone, filteredItems, category);
-            state.selectedCategory = category;
-            state.currentStep = 'selecting_item';
-          } else {
-            await this.sendCategoryItems(phone, filteredItems, category);
-            state.selectedCategory = category;
-            state.currentStep = 'viewing_items';
-          }
-        } else {
-          await whatsapp.sendButtons(phone, `❌ Invalid number. Please enter 0 for All Items or 1-${categories.length} for a category.`, [
-            { id: 'home', text: 'Main Menu' }
-          ]);
         }
       }
 
       // ========== NUMBER SELECTION (for paginated items) ==========
-      else if (/^\d+$/.test(msg) && (state.currentStep === 'viewing_items' || state.currentStep === 'selecting_item')) {
-        const itemNum = parseInt(msg);
-        const filteredItems = this.filterByFoodType(menuItems, state.foodTypePreference || 'both');
-        let itemsList = filteredItems;
-        
-        // If a category is selected, filter by it
-        if (state.selectedCategory && state.selectedCategory !== 'all') {
-          itemsList = filteredItems.filter(m => 
-            Array.isArray(m.category) ? m.category.includes(state.selectedCategory) : m.category === state.selectedCategory
-          );
-        }
-        
-        if (itemNum >= 1 && itemNum <= itemsList.length) {
-          const item = itemsList[itemNum - 1];
-          if (state.currentStep === 'selecting_item') {
-            // For ordering - go to quantity selection
-            state.selectedItem = item._id.toString();
-            await this.sendQuantitySelection(phone, item);
-            state.currentStep = 'select_quantity';
-          } else {
-            // For browsing - show item details
-            await this.sendItemDetails(phone, menuItems, item._id.toString());
-            state.selectedItem = item._id.toString();
-            state.currentStep = 'viewing_item_details';
+      else if (/^\d+$/.test(msg)) {
+        const currentState = await conversationState.getState(null, { phone });
+        if (currentState.currentStep === 'viewing_items' || currentState.currentStep === 'selecting_item') {
+          const itemNum = parseInt(msg);
+          const filteredItems = menuHandler.filterByFoodType(menuItems, currentState.foodTypePreference || 'both');
+          let itemsList = filteredItems;
+          
+          // If a category is selected, filter by it
+          if (currentState.selectedCategory && currentState.selectedCategory !== 'all') {
+            itemsList = filteredItems.filter(m => 
+              Array.isArray(m.category) ? m.category.includes(currentState.selectedCategory) : m.category === currentState.selectedCategory
+            );
           }
-        } else {
-          await whatsapp.sendButtons(phone, `❌ Invalid number. Please enter a number between 1 and ${itemsList.length}.`, [
-            { id: 'home', text: 'Main Menu' }
-          ]);
+          
+          if (itemNum >= 1 && itemNum <= itemsList.length) {
+            const item = itemsList[itemNum - 1];
+            if (currentState.currentStep === 'selecting_item') {
+              // For ordering - go to quantity selection
+              await conversationState.setState(null, { selectedItem: item._id.toString() }, { phone });
+              await cartHandler.sendQuantitySelection(phone, item);
+              await conversationState.setState(null, { currentStep: 'select_quantity' }, { phone });
+            } else {
+              // For browsing - show item details
+              await this.sendItemDetails(phone, menuItems, item._id.toString());
+              await conversationState.setState(null, { selectedItem: item._id.toString(), currentStep: 'viewing_item_details' }, { phone });
+            }
+          } else {
+            await whatsapp.sendButtons(phone, `❌ Invalid number. Please enter a number between 1 and ${itemsList.length}.`, [
+              { id: 'home', text: 'Main Menu' }
+            ]);
+          }
         }
       }
 
@@ -4542,7 +4083,7 @@ const chatbot = {
               ]);
             }
             
-            state.currentStep = 'main_menu';
+            await conversationState.setState(null, { currentStep: 'main_menu' }, { phone });
           } else {
             // Exact match found - show items
             // Use pre-built label or construct one
@@ -4553,15 +4094,13 @@ const chatbot = {
             // If only 1 item matches, show item details directly
             if (matchingItems.length === 1) {
               const item = matchingItems[0];
-              state.selectedItem = item._id.toString();
+              await conversationState.setState(null, { selectedItem: item._id.toString() }, { phone });
               await this.sendItemDetails(phone, menuItems, item._id.toString());
-              state.currentStep = 'viewing_item_details';
+              await conversationState.setState(null, { currentStep: 'viewing_item_details' }, { phone });
             } else {
               // Multiple items - show list
-              state.searchTag = msg.trim();
-              state.tagSearchResults = matchingItems.map(i => i._id.toString());
+              await conversationState.setState(null, { searchTag: msg.trim(), tagSearchResults: matchingItems.map(i => i._id.toString()), currentStep: 'viewing_tag_results' }, { phone });
               await this.sendItemsByTag(phone, matchingItems, displayLabel);
-              state.currentStep = 'viewing_tag_results';
             }
           }
         }
@@ -4588,7 +4127,7 @@ const chatbot = {
                 { id: 'home', text: '🏠 Main Menu' }
               ]);
             }
-            state.currentStep = 'main_menu';
+            await conversationState.setState(null, { currentStep: 'main_menu' }, { phone });
           } else {
             // Only food type keyword (e.g., just "veg" or "nonveg") - show that menu
             let foodType = 'both';
@@ -4605,42 +4144,41 @@ const chatbot = {
               label = '🍗 Non-Veg Menu';
             }
             
-            state.foodTypePreference = foodType;
-            const filteredItems = this.filterByFoodType(menuItems, foodType);
+            await conversationState.setState(null, { foodTypePreference: foodType }, { phone });
+            const filteredItems = menuHandler.filterByFoodType(menuItems, foodType);
             
             if (filteredItems.length > 0) {
-              await this.sendMenuCategoriesWithLabel(phone, filteredItems, label);
-              state.currentStep = 'select_category';
+              await menuHandler.sendMenuCategoriesWithLabel(phone, filteredItems, label);
+              await conversationState.setState(null, { currentStep: 'select_category' }, { phone });
             } else {
               await whatsapp.sendButtons(phone, 
                 `❌ No ${label.replace(/[🌿🥚🍗🍽️]\s*/, '')} items available right now.`,
                 [
-                  { id: 'view_menu', text: '📋 View All Menu' },
+                  { id: 'place_order', text: '🍽️ Order Food' },
                   { id: 'home', text: '🏠 Main Menu' }
                 ]
               );
-              state.currentStep = 'main_menu';
+              await conversationState.setState(null, { currentStep: 'main_menu' }, { phone });
             }
           }
         }
         // Category search - only if no food type specified and matches a category
         else if (this.findCategory(msg, menuItems)) {
           const category = this.findCategory(msg, menuItems);
-          const filteredItems = this.filterByFoodType(menuItems, state.foodTypePreference || 'both');
-          if (state.currentStep === 'browsing_menu' || state.currentStep === 'selecting_item') {
-            await this.sendItemsForOrder(phone, filteredItems, category);
-            state.selectedCategory = category;
-            state.currentStep = 'selecting_item';
+          const currentState = await conversationState.getState(null, { phone });
+          const filteredItems = menuHandler.filterByFoodType(menuItems, currentState.foodTypePreference || 'both');
+          if (currentState.currentStep === 'browsing_menu' || currentState.currentStep === 'selecting_item') {
+            await menuHandler.sendCategoryItemsForOrder(phone, filteredItems, category);
+            await conversationState.setState(null, { selectedCategory: category, currentStep: 'selecting_item' }, { phone });
           } else {
-            await this.sendCategoryItems(phone, filteredItems, category);
-            state.selectedCategory = category;
-            state.currentStep = 'viewing_items';
+            await menuHandler.sendCategoryItems(phone, filteredItems, category);
+            await conversationState.setState(null, { selectedCategory: category, currentStep: 'viewing_items' }, { phone });
           }
         }
         // ========== WELCOME FOR NEW/UNKNOWN STATE ==========
-        else if (state.currentStep === 'welcome' || !state.currentStep) {
+        else if (currentState.currentStep === 'welcome' || !currentState.currentStep) {
           await this.sendWelcome(phone);
-          state.currentStep = 'main_menu';
+          await conversationState.setState(null, { currentStep: 'main_menu' }, { phone });
         }
         // ========== GENERAL SEARCH FALLBACK ==========
         // If user typed something that looks like a search (2+ chars), show item not found
@@ -4664,7 +4202,7 @@ const chatbot = {
               { id: 'home', text: '🏠 Main Menu' }
             ]);
           }
-          state.currentStep = 'main_menu';
+          await conversationState.setState(null, { currentStep: 'main_menu' }, { phone });
         }
         // ========== FALLBACK ==========
         else {
@@ -4690,9 +4228,7 @@ const chatbot = {
     try {
       const latestCustomer = await Customer.findOne({ phone });
       if (latestCustomer) {
-        latestCustomer.conversationState = state;
-        latestCustomer.conversationState.lastInteraction = new Date();
-        await latestCustomer.save();
+        await conversationState.setState(null, { lastInteraction: new Date() }, { phone });
       }
     } catch (saveErr) {
       console.error('Error saving conversation state:', saveErr.message);
@@ -4755,7 +4291,7 @@ const chatbot = {
   // ============ ORDER FOOD MENU ============
   async sendOrderFoodMenu(phone) {
     // Send only the browse menu options (same as sendFoodTypeSelection)
-    await this.sendFoodTypeSelection(phone);
+    await menuHandler.handleFoodTypeSelection(phone);
   },
 
   // ============ MY ORDERS MENU ============
@@ -4771,315 +4307,6 @@ const chatbot = {
     ], 'Perivi Hotel');
   },
 
-  // ============ MENU BROWSING ============
-  async sendFoodTypeSelection(phone) {
-    const browseMenuImageUrl = await chatbotImagesService.getImageUrl('browse_menu');
-    await sendWithOptionalImage(phone, browseMenuImageUrl,
-      '🍽️ *Browse Menu*\n\nWhat would you like to see?',
-      [
-        { id: 'food_veg', text: 'Veg Only' },
-        { id: 'food_nonveg', text: 'Non-Veg Only' },
-        { id: 'food_both', text: 'Show All' }
-      ]
-    );
-  },
-
-  async sendMenuCategories(phone, menuItems, label = 'Our Menu', page = 0) {
-    // Flatten category arrays and dedupe (category is an array field)
-    const categories = [...new Set(menuItems.flatMap(m => Array.isArray(m.category) ? m.category : [m.category]))];
-    
-    if (!categories.length) {
-      await whatsapp.sendButtons(phone, '📋 No menu items available right now.', [
-        { id: 'home', text: 'Main Menu' }
-      ]);
-      return;
-    }
-
-    // If 9 or fewer categories (+ All Items = 10), use WhatsApp list without pagination
-    if (categories.length <= 9) {
-      const rows = [
-        { rowId: 'cat_all', title: '📋 All Items', description: `${menuItems.length} items - View everything` }
-      ];
-      
-      categories.forEach(cat => {
-        const count = menuItems.filter(m => Array.isArray(m.category) ? m.category.includes(cat) : m.category === cat).length;
-        const safeId = cat.replace(/[^a-zA-Z0-9_]/g, '_');
-        rows.push({ rowId: `cat_${safeId}`, title: cat.substring(0, 24), description: `${count} items available` });
-      });
-
-      await whatsapp.sendList(phone, label, 'Select a category to browse items', 'View Categories',
-        [{ title: 'Menu Categories', rows }], 'Fresh & Delicious!');
-      return;
-    }
-
-    // More than 9 categories - use pagination with WhatsApp list
-    const CATS_PER_PAGE = 9; // 9 categories + 1 "All Items" = 10 rows max
-    const totalPages = Math.ceil(categories.length / CATS_PER_PAGE);
-    const startIdx = page * CATS_PER_PAGE;
-    const pageCats = categories.slice(startIdx, startIdx + CATS_PER_PAGE);
-
-    // Build rows for the list
-    const rows = [];
-    
-    // Add "All Items" option on first page only
-    if (page === 0) {
-      rows.push({ rowId: 'cat_all', title: '📋 All Items', description: `${menuItems.length} items - View everything` });
-    }
-    
-    pageCats.forEach(cat => {
-      const count = menuItems.filter(m => Array.isArray(m.category) ? m.category.includes(cat) : m.category === cat).length;
-      const safeId = cat.replace(/[^a-zA-Z0-9_]/g, '_');
-      rows.push({ rowId: `cat_${safeId}`, title: cat.substring(0, 24), description: `${count} items available` });
-    });
-
-    await whatsapp.sendList(
-      phone,
-      `📋 ${label}`,
-      `Page ${page + 1}/${totalPages} • ${categories.length} categories\nTap to select a category`,
-      'View Categories',
-      [{ title: 'Menu Categories', rows }],
-      'Select a category'
-    );
-
-    // Send navigation buttons
-    const buttons = [];
-    if (page > 0) buttons.push({ id: `menucat_page_${page - 1}`, text: 'Previous' });
-    if (page < totalPages - 1) buttons.push({ id: `menucat_page_${page + 1}`, text: 'Next' });
-    buttons.push({ id: 'home', text: 'Menu' });
-
-    await whatsapp.sendButtons(phone, `Page ${page + 1} of ${totalPages}`, buttons.slice(0, 3));
-  },
-
-  async sendMenuCategoriesWithLabel(phone, menuItems, label, page = 0) {
-    await this.sendMenuCategories(phone, menuItems, label, page);
-  },
-
-  async sendCategoryItems(phone, menuItems, category, page = 0) {
-    // Filter items that include this category (category is an array field)
-    const items = menuItems.filter(m => Array.isArray(m.category) ? m.category.includes(category) : m.category === category);
-    
-    if (!items.length) {
-      await whatsapp.sendButtons(phone, `📋 No items in ${category} right now.`, [
-        { id: 'view_menu', text: 'Back to Menu' },
-        { id: 'home', text: 'Main Menu' }
-      ]);
-      return;
-    }
-
-    const getFoodTypeIcon = (type) => type === 'veg' ? '🟢' : type === 'nonveg' ? '🔴' : type === 'egg' ? '🟡' : '';
-    const ITEMS_PER_PAGE = 10;
-    const totalPages = Math.ceil(items.length / ITEMS_PER_PAGE);
-    const startIdx = page * ITEMS_PER_PAGE;
-    const pageItems = items.slice(startIdx, startIdx + ITEMS_PER_PAGE);
-
-    // Build rows for the list
-    const rows = pageItems.map(item => {
-      const ratingStr = item.totalRatings > 0 ? `⭐${item.avgRating}` : '☆';
-      const priceDisplay = formatPriceWithOffer(item);
-      return {
-        rowId: `view_${item._id}`,
-        title: `${getFoodTypeIcon(item.foodType)} ${item.name}`.substring(0, 24),
-        description: `${ratingStr} • ${priceDisplay} • ${item.quantity || 1} ${item.unit || 'piece'}`.substring(0, 72)
-      };
-    });
-
-    // Only items in the list, no navigation rows
-    const sections = [{ title: `${category} (${items.length} items)`, rows }];
-
-    await whatsapp.sendList(
-      phone,
-      `📋 ${category}`,
-      `Page ${page + 1}/${totalPages} • ${items.length} items total\nTap an item to view details`,
-      'View Items',
-      sections,
-      'Select an item'
-    );
-
-    // Send navigation buttons if multiple pages
-    if (totalPages > 1) {
-      const safeCat = category.replace(/[^a-zA-Z0-9]/g, '_');
-      const buttons = [];
-      if (page > 0) buttons.push({ id: `catpage_${safeCat}_${page - 1}`, text: 'Previous' });
-      if (page < totalPages - 1) buttons.push({ id: `catpage_${safeCat}_${page + 1}`, text: 'Next' });
-      buttons.push({ id: 'view_menu', text: 'Menu' });
-      await whatsapp.sendButtons(phone, `Page ${page + 1} of ${totalPages}`, buttons.slice(0, 3));
-    }
-  },
-
-  // Send all items (for browsing) - always use WhatsApp list with pagination
-  async sendAllItems(phone, menuItems, page = 0) {
-    if (!menuItems.length) {
-      await whatsapp.sendButtons(phone, '📋 No items available right now.', [
-        { id: 'view_menu', text: 'Back to Menu' },
-        { id: 'home', text: 'Main Menu' }
-      ]);
-      return;
-    }
-
-    const getFoodTypeIcon = (type) => type === 'veg' ? '🟢' : type === 'nonveg' ? '🔴' : type === 'egg' ? '🟡' : '';
-    const ITEMS_PER_PAGE = 10;
-    const totalPages = Math.ceil(menuItems.length / ITEMS_PER_PAGE);
-    const startIdx = page * ITEMS_PER_PAGE;
-    const pageItems = menuItems.slice(startIdx, startIdx + ITEMS_PER_PAGE);
-
-    // Build rows for the list
-    const rows = pageItems.map(item => {
-      const ratingStr = item.totalRatings > 0 ? `⭐${item.avgRating}` : '☆';
-      const priceDisplay = formatPriceWithOffer(item);
-      return {
-        rowId: `view_${item._id}`,
-        title: `${getFoodTypeIcon(item.foodType)} ${item.name}`.substring(0, 24),
-        description: `${ratingStr} • ${priceDisplay} • ${item.quantity || 1} ${item.unit || 'piece'}`.substring(0, 72)
-      };
-    });
-
-    const sections = [{ title: `All Items (${menuItems.length})`, rows }];
-
-    await whatsapp.sendList(
-      phone,
-      '📋 All Items',
-      `Page ${page + 1}/${totalPages} • ${menuItems.length} items total\nTap an item to view details`,
-      'View Items',
-      sections,
-      'Select an item'
-    );
-
-    // Send navigation buttons if multiple pages
-    if (totalPages > 1) {
-      const buttons = [];
-      if (page > 0) buttons.push({ id: `allitems_page_${page - 1}`, text: 'Previous' });
-      if (page < totalPages - 1) buttons.push({ id: `allitems_page_${page + 1}`, text: 'Next' });
-      buttons.push({ id: 'view_menu', text: 'Menu' });
-      await whatsapp.sendButtons(phone, `Page ${page + 1} of ${totalPages}`, buttons.slice(0, 3));
-    }
-  },
-
-  // Send items matching a tag keyword (for tag-based search)
-  async sendItemsByTag(phone, items, tagKeyword, page = 0) {
-    if (!items.length) {
-      const itemNotAvailableImg = await chatbotImagesService.getImageUrl('item_not_available');
-      if (itemNotAvailableImg) {
-        await whatsapp.sendImage(phone, itemNotAvailableImg, `🔍 No items found for "${tagKeyword}".`);
-      }
-      await whatsapp.sendButtons(phone, itemNotAvailableImg ? 'What would you like to do?' : `🔍 No items found for "${tagKeyword}".`, [
-        { id: 'view_menu', text: 'Browse Menu' },
-        { id: 'home', text: 'Main Menu' }
-      ]);
-      return;
-    }
-
-    const getFoodTypeIcon = (type) => type === 'veg' ? '🟢' : type === 'nonveg' ? '🔴' : type === 'egg' ? '🟡' : '';
-    const ITEMS_PER_PAGE = 10;
-    const totalPages = Math.ceil(items.length / ITEMS_PER_PAGE);
-    const startIdx = page * ITEMS_PER_PAGE;
-    const pageItems = items.slice(startIdx, startIdx + ITEMS_PER_PAGE);
-
-    // Build rows for the list - use view_ prefix so user can see details first
-    const rows = pageItems.map(item => {
-      const ratingStr = item.totalRatings > 0 ? `⭐${item.avgRating}` : '☆';
-      const priceDisplay = formatPriceWithOffer(item);
-      return {
-        rowId: `view_${item._id}`,
-        title: `${getFoodTypeIcon(item.foodType)} ${item.name}`.substring(0, 24),
-        description: `${ratingStr} • ${priceDisplay} • ${item.quantity || 1} ${item.unit || 'piece'}`.substring(0, 72)
-      };
-    });
-
-    const sections = [{ title: `"${tagKeyword}" Items (${items.length})`, rows }];
-
-    await whatsapp.sendList(
-      phone,
-      `🏷️ ${tagKeyword}`,
-      `Found ${items.length} items matching "${tagKeyword}"\nTap an item to view details & add to cart`,
-      'View Items',
-      sections,
-      'Select an item'
-    );
-
-    // Send navigation buttons if multiple pages
-    if (totalPages > 1) {
-      const safeTag = tagKeyword.replace(/[^a-zA-Z0-9]/g, '_');
-      const buttons = [];
-      if (page > 0) buttons.push({ id: `tagpage_${safeTag}_${page - 1}`, text: 'Previous' });
-      if (page < totalPages - 1) buttons.push({ id: `tagpage_${safeTag}_${page + 1}`, text: 'Next' });
-      buttons.push({ id: 'view_menu', text: 'Menu' });
-      await whatsapp.sendButtons(phone, `Page ${page + 1} of ${totalPages}`, buttons.slice(0, 3));
-    }
-  },
-
-  // Send products with images (fallback for catalog)
-  async sendProductsWithImages(phone, items) {
-    const getFoodTypeIcon = (type) => type === 'veg' ? '🟢' : type === 'nonveg' ? '🔴' : type === 'egg' ? '🟡' : '';
-    
-    await whatsapp.sendMessage(phone, '🍽️ *Our Menu*\nBrowse items below and tap to add to cart!');
-    
-    for (const item of items.slice(0, 5)) {
-      const icon = getFoodTypeIcon(item.foodType);
-      const msg = `${icon} *${item.name}*\n💰 ₹${item.price}\n\n${item.description || 'Delicious!'}`;
-      
-      if (item.image && !item.image.startsWith('data:')) {
-        await whatsapp.sendImageWithButtons(phone, item.image, msg, [
-          { id: `add_${item._id}`, text: 'Add to Cart' }
-        ]);
-      } else {
-        await whatsapp.sendButtons(phone, msg, [
-          { id: `add_${item._id}`, text: 'Add to Cart' }
-        ]);
-      }
-    }
-    
-    await whatsapp.sendButtons(phone, 'Want to see more items?', [
-      { id: 'food_both', text: 'Full Menu' },
-      { id: 'view_cart', text: 'View Cart' },
-      { id: 'home', text: 'Home' }
-    ]);
-  },
-
-  async sendItemDetails(phone, menuItems, itemId) {
-    const item = menuItems.find(m => m._id.toString() === itemId);
-    if (!item) {
-      await whatsapp.sendButtons(phone, '❌ Item not found.', [
-        { id: 'view_menu', text: 'View Menu' }
-      ]);
-      return;
-    }
-
-    const foodTypeLabel = item.foodType === 'veg' ? '🌿 Veg' : item.foodType === 'nonveg' ? '🍗 Non-Veg' : item.foodType === 'egg' ? '🥚 Egg' : '';
-    
-    // Rating display
-    let ratingDisplay = '';
-    if (item.totalRatings > 0) {
-      const fullStars = Math.floor(item.avgRating);
-      const stars = '⭐'.repeat(fullStars);
-      ratingDisplay = `${stars} ${item.avgRating} (${item.totalRatings} reviews)`;
-    } else {
-      ratingDisplay = '☆☆☆☆☆ No ratings yet';
-    }
-    
-    let msg = `*${item.name}*${foodTypeLabel ? ` ${foodTypeLabel}` : ''}\n\n`;
-    msg += `${ratingDisplay}\n\n`;
-    msg += `💰 *Price:* ${formatPriceWithOffer(item)} / ${item.quantity || 1} ${item.unit || 'piece'}\n`;
-    msg += `⏱️ *Prep Time:* ${item.preparationTime || 15} mins\n`;
-    if (item.tags?.length) msg += `🏷️ *Tags:* ${item.tags.join(', ')}\n`;
-    msg += formatOfferTypes(item);
-    msg += `\n\n📝 ${item.description || 'Delicious dish prepared fresh!'}`;
-
-    const buttons = [
-      { id: `add_${item._id}`, text: 'Add to Cart' },
-      { id: 'view_menu', text: 'Back to Menu' },
-      { id: 'review_pay', text: 'Review & Order' }
-    ];
-
-    if (item.image) {
-      // Send image with details and buttons in one message
-      await whatsapp.sendImageWithButtons(phone, item.image, msg, buttons);
-    } else {
-      // No image, send regular buttons with details
-      await whatsapp.sendButtons(phone, msg, buttons);
-    }
-  },
-
-  // Send item details for order flow (with Add to Cart focus)
   async sendItemDetailsForOrder(phone, item) {
     const foodTypeLabel = item.foodType === 'veg' ? '🌿 Veg' : item.foodType === 'nonveg' ? '🍗 Non-Veg' : item.foodType === 'egg' ? '🥚 Egg' : '';
     
@@ -5122,208 +4349,6 @@ const chatbot = {
         { id: 'delivery', text: 'Delivery' },
         { id: 'pickup', text: 'Pickup' },
         { id: 'dine_in', text: 'Dine-in' }
-      ]
-    );
-  },
-
-  async sendMenuForOrder(phone, menuItems, label = 'Select Items', page = 0) {
-    // Flatten category arrays and dedupe (category is an array field)
-    const categories = [...new Set(menuItems.flatMap(m => Array.isArray(m.category) ? m.category : [m.category]))];
-    
-    if (!categories.length) {
-      await whatsapp.sendButtons(phone, '📋 No menu items available.', [
-        { id: 'home', text: 'Main Menu' }
-      ]);
-      return;
-    }
-
-    // If 9 or fewer categories (+ All Items = 10), use WhatsApp list without pagination
-    if (categories.length <= 9) {
-      const rows = [
-        { rowId: 'order_cat_all', title: '📋 All Items', description: `${menuItems.length} items - View everything` }
-      ];
-      
-      categories.forEach(cat => {
-        const count = menuItems.filter(m => Array.isArray(m.category) ? m.category.includes(cat) : m.category === cat).length;
-        const safeId = cat.replace(/[^a-zA-Z0-9_]/g, '_');
-        rows.push({ rowId: `order_cat_${safeId}`, title: cat.substring(0, 24), description: `${count} items` });
-      });
-
-      await whatsapp.sendList(phone, label, 'Choose a category to add items to your cart', 'View Categories',
-        [{ title: 'Categories', rows }], 'Tap to browse');
-      return;
-    }
-
-    // More than 9 categories - use pagination with WhatsApp list
-    const CATS_PER_PAGE = 9; // 9 categories + 1 "All Items" = 10 rows max
-    const totalPages = Math.ceil(categories.length / CATS_PER_PAGE);
-    const startIdx = page * CATS_PER_PAGE;
-    const pageCats = categories.slice(startIdx, startIdx + CATS_PER_PAGE);
-
-    // Build rows for the list
-    const rows = [];
-    
-    // Add "All Items" option on first page only
-    if (page === 0) {
-      rows.push({ rowId: 'order_cat_all', title: '📋 All Items', description: `${menuItems.length} items - View everything` });
-    }
-    
-    pageCats.forEach(cat => {
-      const count = menuItems.filter(m => Array.isArray(m.category) ? m.category.includes(cat) : m.category === cat).length;
-      const safeId = cat.replace(/[^a-zA-Z0-9_]/g, '_');
-      rows.push({ rowId: `order_cat_${safeId}`, title: cat.substring(0, 24), description: `${count} items` });
-    });
-
-    await whatsapp.sendList(
-      phone,
-      `🛒 ${label}`,
-      `Page ${page + 1}/${totalPages} • ${categories.length} categories\nTap to select a category`,
-      'View Categories',
-      [{ title: 'Categories', rows }],
-      'Select a category'
-    );
-
-    // Send navigation buttons
-    const buttons = [];
-    if (page > 0) buttons.push({ id: `ordercat_page_${page - 1}`, text: 'Previous' });
-    if (page < totalPages - 1) buttons.push({ id: `ordercat_page_${page + 1}`, text: 'Next' });
-    buttons.push({ id: 'home', text: 'Menu' });
-
-    await whatsapp.sendButtons(phone, `Page ${page + 1} of ${totalPages}`, buttons.slice(0, 3));
-  },
-
-  async sendMenuForOrderWithLabel(phone, menuItems, label, page = 0) {
-    await this.sendMenuForOrder(phone, menuItems, label, page);
-  },
-
-  async sendItemsForOrder(phone, menuItems, category, page = 0) {
-    // Filter items that include this category (category is an array field)
-    const items = menuItems.filter(m => Array.isArray(m.category) ? m.category.includes(category) : m.category === category);
-    
-    if (!items.length) {
-      await whatsapp.sendButtons(phone, `📋 No items in ${category}.`, [
-        { id: 'add_more', text: 'Other Categories' },
-        { id: 'home', text: 'Main Menu' }
-      ]);
-      return;
-    }
-
-    const getFoodTypeIcon = (type) => type === 'veg' ? '🟢' : type === 'nonveg' ? '🔴' : type === 'egg' ? '🟡' : '';
-    const ITEMS_PER_PAGE = 10;
-    const totalPages = Math.ceil(items.length / ITEMS_PER_PAGE);
-    const startIdx = page * ITEMS_PER_PAGE;
-    const pageItems = items.slice(startIdx, startIdx + ITEMS_PER_PAGE);
-
-    // Build rows for the list
-    const rows = pageItems.map(item => {
-      const ratingStr = item.totalRatings > 0 ? `⭐${item.avgRating}` : '☆';
-      const priceDisplay = formatPriceWithOffer(item);
-      return {
-        rowId: `add_${item._id}`,
-        title: `${getFoodTypeIcon(item.foodType)} ${item.name}`.substring(0, 24),
-        description: `${ratingStr} • ${priceDisplay} • ${item.quantity || 1} ${item.unit || 'piece'}`.substring(0, 72)
-      };
-    });
-
-    const sections = [{ title: `${category} (${items.length} items)`, rows }];
-
-    await whatsapp.sendList(
-      phone,
-      `📋 ${category}`,
-      `Page ${page + 1}/${totalPages} • ${items.length} items total\nTap an item to add to cart`,
-      'View Items',
-      sections,
-      'Select an item'
-    );
-
-    // Send navigation buttons if multiple pages
-    if (totalPages > 1) {
-      const safeCat = category.replace(/[^a-zA-Z0-9]/g, '_');
-      const buttons = [];
-      if (page > 0) buttons.push({ id: `ordercatpage_${safeCat}_${page - 1}`, text: 'Previous' });
-      if (page < totalPages - 1) buttons.push({ id: `ordercatpage_${safeCat}_${page + 1}`, text: 'Next' });
-      buttons.push({ id: 'home', text: 'Menu' });
-      await whatsapp.sendButtons(phone, `Page ${page + 1} of ${totalPages}`, buttons.slice(0, 3));
-    }
-  },
-
-  // Send all items for ordering with pagination
-  async sendAllItemsForOrder(phone, menuItems, page = 0) {
-    if (!menuItems.length) {
-      await whatsapp.sendButtons(phone, '📋 No items available.', [
-        { id: 'add_more', text: 'Other Categories' },
-        { id: 'home', text: 'Main Menu' }
-      ]);
-      return;
-    }
-
-    const getFoodTypeIcon = (type) => type === 'veg' ? '🟢' : type === 'nonveg' ? '🔴' : type === 'egg' ? '🟡' : '';
-    const ITEMS_PER_PAGE = 10;
-    const totalPages = Math.ceil(menuItems.length / ITEMS_PER_PAGE);
-    const startIdx = page * ITEMS_PER_PAGE;
-    const pageItems = menuItems.slice(startIdx, startIdx + ITEMS_PER_PAGE);
-
-    // Build rows for the list
-    const rows = pageItems.map(item => {
-      const ratingStr = item.totalRatings > 0 ? `⭐${item.avgRating}` : '☆';
-      const priceDisplay = formatPriceWithOffer(item);
-      return {
-        rowId: `add_${item._id}`,
-        title: `${getFoodTypeIcon(item.foodType)} ${item.name}`.substring(0, 24),
-        description: `${ratingStr} • ${priceDisplay} • ${item.quantity || 1} ${item.unit || 'piece'}`.substring(0, 72)
-      };
-    });
-
-    const sections = [{ title: `All Items (${menuItems.length})`, rows }];
-
-    await whatsapp.sendList(
-      phone,
-      '📋 All Items',
-      `Page ${page + 1}/${totalPages} • ${menuItems.length} items total\nTap an item to add to cart`,
-      'View Items',
-      sections,
-      'Select an item'
-    );
-
-    // Send navigation buttons if multiple pages
-    if (totalPages > 1) {
-      const buttons = [];
-      if (page > 0) buttons.push({ id: `orderitems_page_${page - 1}`, text: 'Previous' });
-      if (page < totalPages - 1) buttons.push({ id: `orderitems_page_${page + 1}`, text: 'Next' });
-      buttons.push({ id: 'home', text: 'Menu' });
-      await whatsapp.sendButtons(phone, `Page ${page + 1} of ${totalPages}`, buttons.slice(0, 3));
-    }
-  },
-
-  async sendQuantitySelection(phone, item) {
-    const unitLabel = item.unit || 'piece';
-    const qtyLabel = item.quantity || 1;
-    const priceDisplay = formatPriceWithOffer(item);
-    const selectQtyImageUrl = await chatbotImagesService.getImageUrl('select_quantity');
-    
-    await sendWithOptionalImage(phone, selectQtyImageUrl,
-      `*${item.name}*\n💰 ${priceDisplay} / ${qtyLabel} ${unitLabel}\n\nHow many would you like?`,
-      [
-        { id: 'qty_1', text: '1' },
-        { id: 'qty_2', text: '2' },
-        { id: 'qty_3', text: '3' }
-      ]
-    );
-  },
-
-  async sendAddedToCart(phone, item, qty, cart) {
-    const cartCount = cart.reduce((sum, c) => sum + c.quantity, 0);
-    const unitInfo = `${item.quantity || 1} ${item.unit || 'piece'}`;
-    const priceDisplay = formatPriceWithOffer(item);
-    const effectivePrice = item.offerPrice || item.price;
-    const addedToCartImageUrl = await chatbotImagesService.getImageUrl('added_to_cart');
-    
-    await sendWithOptionalImage(phone, addedToCartImageUrl,
-      `✅ *Added to Cart!*\n\n${qty}x ${item.name} (${unitInfo})\n💰 ${priceDisplay} × ${qty} = ₹${effectivePrice * qty}\n\n🛒 Cart: ${cartCount} items`,
-      [
-        { id: 'add_more', text: 'Add More' },
-        { id: 'view_cart', text: 'View Cart' },
-        { id: 'review_pay', text: 'Review & Order' }
       ]
     );
   },
@@ -5381,268 +4406,7 @@ const chatbot = {
     ]);
   },
 
-  async requestLocation(phone) {
-    // Request location with action buttons
-    await whatsapp.sendLocationRequest(phone,
-      `📍 *Share Your Delivery Location*\n\nPlease share your location for accurate delivery.`
-    );
-  },
 
-  async sendPaymentMethodOptions(phone, customer, state = {}) {
-    // Refresh customer from database to ensure we have latest cart data
-    const freshCustomer = await Customer.findOne({ phone }).populate('cart.menuItem');
-    
-    if (!freshCustomer?.cart?.length) {
-      await whatsapp.sendButtons(phone, '🛒 Your cart is empty!', [
-        { id: 'view_menu', text: 'View Menu' },
-        { id: 'home', text: 'Main Menu' }
-      ]);
-      return;
-    }
-
-    let itemsTotal = 0;
-    let cartMsg = '🛒 *Order Summary*\n\n';
-    let validItems = 0;
-    
-    freshCustomer.cart.forEach((item, i) => {
-      if (item.menuItem) {
-        const effectivePrice = item.menuItem.offerPrice || item.menuItem.price;
-        const subtotal = effectivePrice * item.quantity;
-        itemsTotal += subtotal;
-        validItems++;
-        const unitInfo = `${item.menuItem.quantity || 1} ${item.menuItem.unit || 'piece'}`;
-        const priceDisplay = formatPriceWithOffer(item.menuItem);
-        cartMsg += `${validItems}. *${item.menuItem.name}* (${unitInfo})\n`;
-        cartMsg += `   Qty: ${item.quantity} × ${priceDisplay} = ₹${subtotal}\n\n`;
-      }
-    });
-    
-    if (validItems === 0) {
-      // Clean up invalid cart items
-      freshCustomer.cart = [];
-      await freshCustomer.save();
-      
-      await whatsapp.sendButtons(phone, '🛒 Your cart is empty!', [
-        { id: 'view_menu', text: 'View Menu' },
-        { id: 'home', text: 'Main Menu' }
-      ]);
-      return;
-    }
-    
-    cartMsg += `━━━━━━━━━━━━━━━\n`;
-    cartMsg += `*Items Total: ₹${itemsTotal}*\n`;
-    
-    // Calculate delivery charge if applicable
-    let deliveryCharge = state.deliveryCharge || 0;
-    const serviceType = state.serviceType || 'delivery';
-    
-    // Recalculate delivery charge if customer has location and service type is delivery
-    if (serviceType === 'delivery' && freshCustomer.deliveryAddress?.latitude && freshCustomer.deliveryAddress?.longitude) {
-      const deliveryResult = await calculateDeliveryCharge(
-        freshCustomer.deliveryAddress.latitude,
-        freshCustomer.deliveryAddress.longitude
-      );
-      deliveryCharge = deliveryResult.charge || 0;
-      
-      if (deliveryResult.distance) {
-        cartMsg += `📍 *Distance:* ${deliveryResult.distance} KM\n`;
-      }
-    }
-    
-    // Show delivery charge if applicable
-    if (deliveryCharge > 0) {
-      cartMsg += `🚚 *Delivery Charge:* ₹${deliveryCharge}\n`;
-    } else if (serviceType === 'delivery') {
-      cartMsg += `🚚 *Delivery:* FREE\n`;
-    }
-    
-    const grandTotal = itemsTotal + deliveryCharge;
-    cartMsg += `━━━━━━━━━━━━━━━\n`;
-    cartMsg += `*Grand Total: ₹${grandTotal}*\n\n`;
-    
-    // Show delivery address if available
-    if (freshCustomer.deliveryAddress?.address && serviceType === 'delivery') {
-      cartMsg += `📍 *Delivery Address:*\n${freshCustomer.deliveryAddress.address}\n\n`;
-    } else if (serviceType === 'pickup') {
-      cartMsg += `🏪 *Self-Pickup at Restaurant*\n\n`;
-    }
-    
-    cartMsg += `💳 Select payment method:`;
-
-    const orderSummaryImageUrl = await chatbotImagesService.getImageUrl('order_summary');
-    await sendWithOptionalImage(phone, orderSummaryImageUrl, cartMsg, [
-      { id: 'pay_upi', text: 'UPI/APP' },
-      { id: 'pay_cod', text: 'COD' },
-      { id: 'clear_cart', text: 'Cancel' }
-    ]);
-  },
-
-  async processCODOrder(phone, customer, state) {
-    // Refresh customer from database to ensure we have latest cart data
-    const freshCustomer = await Customer.findOne({ phone }).populate('cart.menuItem');
-    
-    if (!freshCustomer?.cart?.length) {
-      await whatsapp.sendButtons(phone, '🛒 Your cart is empty!', [
-        { id: 'view_menu', text: 'View Menu' },
-        { id: 'home', text: 'Main Menu' }
-      ]);
-      return { success: false };
-    }
-
-    const serviceType = state.serviceType || state.selectedService || 'delivery';
-    const orderId = generateOrderId(serviceType);
-    let itemsTotal = 0;
-    const items = freshCustomer.cart.filter(item => item.menuItem).map(item => {
-      const effectivePrice = item.menuItem.offerPrice || item.menuItem.price;
-      const subtotal = effectivePrice * item.quantity;
-      itemsTotal += subtotal;
-      return {
-        menuItem: item.menuItem._id,
-        name: item.menuItem.name,
-        quantity: item.quantity,
-        price: effectivePrice,
-        unit: item.menuItem.unit || 'piece',
-        unitQty: item.menuItem.quantity || 1,
-        image: item.menuItem.image
-      };
-    });
-
-    if (!items.length) {
-      await whatsapp.sendButtons(phone, '🛒 Your cart is empty!', [
-        { id: 'view_menu', text: 'View Menu' },
-        { id: 'home', text: 'Main Menu' }
-      ]);
-      return { success: false };
-    }
-
-    // Calculate delivery charge for delivery orders
-    let deliveryCharge = 0;
-    let deliveryDistance = null;
-    if (serviceType === 'delivery' && freshCustomer.deliveryAddress?.latitude && freshCustomer.deliveryAddress?.longitude) {
-      const deliveryResult = await calculateDeliveryCharge(
-        freshCustomer.deliveryAddress.latitude,
-        freshCustomer.deliveryAddress.longitude
-      );
-      deliveryCharge = deliveryResult.charge || 0;
-      deliveryDistance = deliveryResult.distance;
-    }
-    
-    const total = itemsTotal + deliveryCharge;
-
-    const order = new Order({
-      orderId,
-      customer: { phone: freshCustomer.phone, name: freshCustomer.name || 'Customer', email: freshCustomer.email },
-      items,
-      itemsTotal,
-      deliveryCharge,
-      deliveryDistance,
-      totalAmount: total,
-      serviceType: state.serviceType || state.selectedService || 'delivery',
-      deliveryAddress: freshCustomer.deliveryAddress ? {
-        address: freshCustomer.deliveryAddress.address,
-        latitude: freshCustomer.deliveryAddress.latitude,
-        longitude: freshCustomer.deliveryAddress.longitude
-      } : null,
-      paymentMethod: 'cod',
-      status: 'confirmed',
-      trackingUpdates: [{ status: 'confirmed', message: 'Order confirmed - Cash on Delivery' }]
-    });
-    await order.save();
-
-    // Add to WhatsApp broadcast contacts
-    const whatsappBroadcast = require('./whatsappBroadcast');
-    await whatsappBroadcast.addContact(freshCustomer.phone, freshCustomer.name, new Date());
-
-    // Mark customer as having ordered (for accurate customer count)
-    if (!freshCustomer.hasOrdered) {
-      freshCustomer.hasOrdered = true;
-    }
-
-    // Track today's orders count
-    try {
-      const DashboardStats = require('../models/DashboardStats');
-      const now = new Date();
-      const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
-      
-      await DashboardStats.findOneAndUpdate(
-        {},
-        { 
-          $inc: { todayOrders: 1 },
-          $set: { todayDate: todayStr, lastUpdated: new Date() }
-        },
-        { upsert: true }
-      );
-    } catch (statsErr) {
-      console.error('Error tracking today orders:', statsErr.message);
-    }
-
-    // Emit event for real-time updates
-    const dataEvents = require('./eventEmitter');
-    dataEvents.emit('orders');
-    dataEvents.emit('dashboard');
-
-    // Sync to Google Sheets
-    googleSheets.addOrder(order).catch(err => console.error('Google Sheets sync error:', err));
-
-    // Send push notification to admin for new COD order
-    try {
-      const User = require('../models/User');
-      const pushNotification = require('./pushNotification');
-      
-      const admins = await User.find({ pushToken: { $ne: null } });
-      for (const admin of admins) {
-        if (admin.pushToken) {
-          await pushNotification.sendAdminNewOrderNotification(admin.pushToken, {
-            orderId,
-            totalAmount: total,
-            customerName: freshCustomer.name || 'Customer',
-            items
-          });
-        }
-      }
-      if (admins.length > 0) console.log(`📱 Admin push sent for COD order ${orderId}`);
-    } catch (pushErr) {
-      console.error('Admin push error:', pushErr.message);
-    }
-
-    // Clear cart on the fresh customer and save
-    freshCustomer.cart = [];
-    freshCustomer.orderHistory = freshCustomer.orderHistory || [];
-    freshCustomer.orderHistory.push(order._id);
-    await freshCustomer.save();
-    
-    // Also update the original customer object for state consistency
-    customer.cart = [];
-    customer.orderHistory = freshCustomer.orderHistory;
-    
-    state.pendingOrderId = orderId;
-
-    let confirmMsg = `✅ *Order Confirmed!*\n\n`;
-    confirmMsg += `📦 Order ID: *${orderId}*\n`;
-    confirmMsg += `💵 Payment: *Cash on Delivery*\n\n`;
-    confirmMsg += `━━━━━━━━━━━━━━━\n`;
-    confirmMsg += `*Items:*\n`;
-    items.forEach((item, i) => {
-      confirmMsg += `${i + 1}. ${item.name} (${item.unitQty} ${item.unit}) x${item.quantity} - ₹${item.price * item.quantity}\n`;
-    });
-    confirmMsg += `━━━━━━━━━━━━━━━\n`;
-    confirmMsg += `*Items Total:* ₹${itemsTotal}\n`;
-    if (deliveryCharge > 0) {
-      confirmMsg += `*Delivery Charge:* ₹${deliveryCharge}\n`;
-    }
-    confirmMsg += `*Grand Total:* ₹${total}\n\n`;
-    confirmMsg += `🙏 Thank you for your order!\nPlease keep ₹${total} ready for payment.`;
-
-    const confirmedImageUrl = await chatbotImagesService.getImageUrl('order_confirmed');
-    
-    await sendWithOptionalImage(phone, confirmedImageUrl, confirmMsg, [
-      { id: 'track_order', text: 'Track Order' },
-      { id: `cancel_${orderId}`, text: 'Cancel Order' },
-      { id: 'home', text: 'Main Menu' }
-    ]);
-
-    return { success: true };
-  },
 
   async sendOrderReview(phone, customer) {
     // Refresh customer from database to ensure we have latest cart data
@@ -5696,78 +4460,6 @@ const chatbot = {
     ]);
   },
 
-  // Send cart options menu when user types just "cart"
-  async sendCartOptionsMenu(phone) {
-    const cartOptionsImageUrl = await chatbotImagesService.getImageUrl('cart_options');
-    const message = `🛒 *Cart Options*\n\nWhat would you like to do?`;
-    
-    await sendWithOptionalImage(phone, cartOptionsImageUrl, message, [
-      { id: 'view_cart', text: '🛒 My Cart' },
-      { id: 'clear_cart', text: '🗑️ Clear Cart' },
-      { id: 'view_menu', text: '📋 Menu' }
-    ]);
-  },
-
-  async sendCart(phone, customer) {
-    // Refresh customer from database to ensure we have latest cart data
-    const freshCustomer = await Customer.findOne({ phone }).populate('cart.menuItem');
-    
-    if (!freshCustomer?.cart?.length) {
-      const cartEmptyImageUrl = await chatbotImagesService.getImageUrl('cart_empty');
-      await sendWithOptionalImage(phone, cartEmptyImageUrl,
-        '🛒 *Your Cart is Empty*\n\nStart adding delicious items!',
-        [
-          { id: 'view_menu', text: 'View Menu' },
-          { id: 'home', text: 'Main Menu' }
-        ]
-      );
-      return;
-    }
-
-    let total = 0;
-    let cartMsg = '🛒 *Your Cart*\n\n';
-    let validItems = 0;
-    
-    freshCustomer.cart.forEach((item, i) => {
-      if (item.menuItem) {
-        const effectivePrice = item.menuItem.offerPrice || item.menuItem.price;
-        const subtotal = effectivePrice * item.quantity;
-        total += subtotal;
-        validItems++;
-        const unitInfo = `${item.menuItem.quantity || 1} ${item.menuItem.unit || 'piece'}`;
-        const priceDisplay = formatPriceWithOffer(item.menuItem);
-        cartMsg += `${validItems}. *${item.menuItem.name}* (${unitInfo})\n`;
-        cartMsg += `   ${item.quantity} × ${priceDisplay} = ₹${subtotal}\n\n`;
-      }
-    });
-    
-    // If no valid items (all menu items were deleted), clean up cart and show empty message
-    if (validItems === 0) {
-      // Clean up invalid cart items
-      freshCustomer.cart = [];
-      await freshCustomer.save();
-      
-      const cartEmptyImageUrl = await chatbotImagesService.getImageUrl('cart_empty');
-      await sendWithOptionalImage(phone, cartEmptyImageUrl,
-        '🛒 *Your Cart is Empty*\n\nStart adding delicious items!',
-        [
-          { id: 'view_menu', text: 'View Menu' },
-          { id: 'home', text: 'Main Menu' }
-        ]
-      );
-      return;
-    }
-    
-    cartMsg += `━━━━━━━━━━━━━━━\n`;
-    cartMsg += `*Total: ₹${total}*`;
-
-    const viewCartImageUrl = await chatbotImagesService.getImageUrl('view_cart');
-    await sendWithOptionalImage(phone, viewCartImageUrl, cartMsg, [
-      { id: 'review_pay', text: 'Review & Order' },
-      { id: 'add_more', text: 'Add More' },
-      { id: 'clear_cart', text: 'Clear Cart' }
-    ]);
-  },
 
   async processCheckout(phone, customer, state) {
     // Refresh customer from database to ensure we have latest cart data
@@ -5781,7 +4473,9 @@ const chatbot = {
       return { success: false };
     }
 
-    const serviceType = state.serviceType || state.selectedService || 'delivery';
+    // Get current state for service type
+    const currentState = await conversationState.getState(null, { phone });
+    const serviceType = currentState.serviceType || currentState.selectedService || 'delivery';
     const orderId = generateOrderId(serviceType);
     let itemsTotal = 0;
     const items = freshCustomer.cart.filter(item => item.menuItem).map(item => {
@@ -5811,7 +4505,7 @@ const chatbot = {
     let deliveryCharge = 0;
     let deliveryDistance = null;
     if (serviceType === 'delivery' && freshCustomer.deliveryAddress?.latitude && freshCustomer.deliveryAddress?.longitude) {
-      const deliveryResult = await calculateDeliveryCharge(
+      const deliveryResult = await locationHandler.handleDeliveryEligibility(
         freshCustomer.deliveryAddress.latitude,
         freshCustomer.deliveryAddress.longitude
       );
@@ -5829,12 +4523,14 @@ const chatbot = {
       deliveryCharge,
       deliveryDistance,
       totalAmount: total,
-      serviceType: state.serviceType || state.selectedService || 'delivery',
+      serviceType: currentState.serviceType || currentState.selectedService || 'delivery',
       deliveryAddress: freshCustomer.deliveryAddress ? {
         address: freshCustomer.deliveryAddress.address,
         latitude: freshCustomer.deliveryAddress.latitude,
         longitude: freshCustomer.deliveryAddress.longitude
       } : null,
+      paymentMethod: 'upi',
+      paymentStatus: 'pending',
       trackingUpdates: [{ status: 'pending', message: 'Order created, awaiting payment' }]
     });
     await order.save();
@@ -5905,7 +4601,7 @@ const chatbot = {
     customer.cart = [];
     customer.orderHistory = freshCustomer.orderHistory;
     
-    state.pendingOrderId = orderId;
+    await conversationState.setState(null, { pendingOrderId: orderId }, { phone });
 
     try {
       // Generate payment page URL (UPI app selection page)
@@ -6354,170 +5050,7 @@ const chatbot = {
     await sendWithOptionalImageCta(phone, openWebsiteImageUrl, msg, 'Open Website', websiteUrl, 'Tap to visit');
   },
 
-  // ============ SERVICE TYPE SELECTION ============
-  async sendServiceTypeSelection(phone) {
-    await whatsapp.sendButtons(phone,
-      '🚚 *Choose Service Type*\n\nHow would you like to receive your order?',
-      [
-        { id: 'service_delivery', text: 'Delivery' },
-        { id: 'service_pickup', text: 'Self-Pickup' }
-      ],
-      'Select your preferred option'
-    );
-  },
 
-  // ============ PICKUP PAYMENT METHOD ============
-  async sendPickupPaymentMethodOptions(phone, customer) {
-    // Refresh customer from database to ensure we have latest cart data
-    const freshCustomer = await Customer.findOne({ phone }).populate('cart.menuItem');
-    if (!freshCustomer || !freshCustomer.cart?.length) {
-      await whatsapp.sendButtons(phone, '🛒 Your cart is empty!', [
-        { id: 'view_menu', text: 'View Menu' }
-      ]);
-      return;
-    }
-
-    // Calculate total
-    let total = 0;
-    const items = [];
-    for (const cartItem of freshCustomer.cart) {
-      if (!cartItem.menuItem) continue;
-      const item = cartItem.menuItem;
-      const price = item.offerPrice && item.offerPrice < item.price ? item.offerPrice : item.price;
-      const itemTotal = price * cartItem.quantity;
-      total += itemTotal;
-      items.push({
-        name: item.name,
-        quantity: cartItem.quantity,
-        price: itemTotal
-      });
-    }
-
-    // Build order summary message
-    let msg = '📋 *Order Summary (Self-Pickup)*\n\n';
-    items.forEach(item => {
-      msg += `• ${item.name} x${item.quantity} - ₹${item.price}\n`;
-    });
-    msg += `\n💰 *Total: ₹${total}*\n\n`;
-    msg += '🏪 *Pickup Location:* Restaurant\n\n';
-    msg += '💳 *Choose Payment Method:*';
-
-    await whatsapp.sendButtons(phone, msg, [
-      { id: 'pickup_pay_hotel', text: 'Pay at Hotel' },
-      { id: 'pickup_pay_upi', text: 'UPI/App' }
-    ], 'Select payment method');
-  },
-
-  // ============ PROCESS PICKUP CHECKOUT ============
-  async processPickupCheckout(phone, customer, state) {
-    try {
-      // Refresh customer from database
-      const freshCustomer = await Customer.findOne({ phone }).populate('cart.menuItem');
-      if (!freshCustomer || !freshCustomer.cart?.length) {
-        await whatsapp.sendButtons(phone, '🛒 Your cart is empty!', [
-          { id: 'view_menu', text: 'View Menu' }
-        ]);
-        return { success: false };
-      }
-
-      // Calculate total and prepare items
-      let total = 0;
-      const items = [];
-      for (const cartItem of freshCustomer.cart) {
-        if (!cartItem.menuItem) continue;
-        const item = cartItem.menuItem;
-        const price = item.offerPrice && item.offerPrice < item.price ? item.offerPrice : item.price;
-        const itemTotal = price * cartItem.quantity;
-        total += itemTotal;
-        items.push({
-          menuItem: item._id,
-          name: item.name,
-          quantity: cartItem.quantity,
-          price: itemTotal,
-          unit: item.unit || 'piece',
-          unitQty: item.unitQty || 1,
-          image: item.image
-        });
-      }
-
-      // Create order
-      const orderId = generateOrderId('pickup');
-      const order = new Order({
-        orderId,
-        customer: {
-          phone: freshCustomer.phone,
-          name: freshCustomer.name || 'Customer',
-          email: freshCustomer.email
-        },
-        deliveryAddress: {
-          address: 'Self-Pickup at Restaurant'
-        },
-        items,
-        totalAmount: total,
-        serviceType: 'pickup',
-        paymentMethod: state.paymentMethod || 'cod',
-        paymentStatus: 'pending',
-        status: 'pending'
-      });
-
-      await order.save();
-      console.log(`✅ Pickup order created: ${orderId}`);
-
-      // Clear cart
-      freshCustomer.cart = [];
-      freshCustomer.conversationState = { currentStep: 'order_placed' };
-      await freshCustomer.save();
-
-      // Send confirmation message
-      let msg = '✅ *Order Request Successful!*\n\n';
-      msg += `📦 Order ID: *${orderId}*\n`;
-      msg += `🏪 Service: *Self-Pickup*\n`;
-      msg += `💰 Total: *₹${total}*\n`;
-      msg += `💳 Payment: *${state.paymentMethod === 'cod' ? 'Pay at Hotel' : 'UPI/App'}*\n\n`;
-      
-      // Add order items details
-      msg += `━━━━━━━━━━━━━━━\n`;
-      msg += `📋 *Order Details*\n`;
-      msg += `━━━━━━━━━━━━━━━\n`;
-      items.forEach((item, index) => {
-        msg += `${index + 1}. ${item.name}\n`;
-        msg += `   ${item.quantity} × ₹${item.price} = ₹${item.price * item.quantity}\n`;
-      });
-      msg += `━━━━━━━━━━━━━━━\n\n`;
-      
-      if (state.paymentMethod === 'cod') {
-        msg += '✨ Your order has been received!\n\n';
-        msg += '📍 Please come to the restaurant to pick up your order.\n';
-        msg += '💵 Payment will be collected at the hotel.\n\n';
-        msg += '⏰ We will notify you when your order is ready!\n\n';
-        msg += 'Thank you for your order! 🙏';
-      } else {
-        msg += '⏳ Waiting for payment confirmation...\n\n';
-        msg += 'Please complete the payment to confirm your order.';
-      }
-
-      // Add cancel button for pickup orders (can only cancel before confirmation)
-      await whatsapp.sendButtons(phone, msg, [
-        { id: 'track_order', text: 'Track Order' },
-        { id: `cancel_${orderId}`, text: 'Cancel Order' },
-        { id: 'home', text: 'Main Menu' }
-      ]);
-
-      // Sync to Google Sheets
-      googleSheets.addOrder(order).catch(err =>
-        console.error('Google Sheets sync error:', err)
-      );
-
-      return { success: true, orderId };
-    } catch (error) {
-      console.error('❌ Pickup checkout error:', error);
-      await whatsapp.sendButtons(phone, '❌ Failed to process your order. Please try again.', [
-        { id: 'view_cart', text: 'View Cart' },
-        { id: 'home', text: 'Main Menu' }
-      ]);
-      return { success: false };
-    }
-  }
 };
 
 module.exports = chatbot;

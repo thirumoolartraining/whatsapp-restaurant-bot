@@ -1,7 +1,8 @@
 const express = require('express');
 const Category = require('../models/Category');
 const MenuItem = require('../models/MenuItem');
-const authMiddleware = require('../middleware/auth');
+const authenticate = require('../middleware/authenticate');
+const authorize = require('../middleware/authorize');
 const cloudinaryService = require('../services/cloudinary');
 const dataEvents = require('../services/eventEmitter');
 const multer = require('multer');
@@ -31,7 +32,7 @@ router.get('/', async (req, res) => {
 });
 
 // Create category
-router.post('/', authMiddleware, upload.single('image'), async (req, res) => {
+router.post('/', authenticate, authorize(['admin']), upload.single('image'), async (req, res) => {
   try {
     const { name, description, image } = req.body;
     
@@ -67,7 +68,7 @@ router.post('/', authMiddleware, upload.single('image'), async (req, res) => {
 });
 
 // Update category
-router.put('/:id', authMiddleware, upload.single('image'), async (req, res) => {
+router.put('/:id', authenticate, authorize(['admin']), upload.single('image'), async (req, res) => {
   try {
     const { name, description, image, isActive, isPaused, sortOrder, removeImage } = req.body;
     
@@ -124,7 +125,7 @@ router.put('/:id', authMiddleware, upload.single('image'), async (req, res) => {
 });
 
 // Toggle pause status
-router.patch('/:id/toggle-pause', authMiddleware, async (req, res) => {
+router.patch('/:id/toggle-pause', authenticate, authorize(['admin']), async (req, res) => {
   try {
     const category = await Category.findById(req.params.id);
     if (!category) {
@@ -143,7 +144,7 @@ router.patch('/:id/toggle-pause', authMiddleware, async (req, res) => {
 });
 
 // Update category schedule
-router.patch('/:id/schedule', authMiddleware, async (req, res) => {
+router.patch('/:id/schedule', authenticate, authorize(['admin']), async (req, res) => {
   try {
     const { enabled, type, startTime, endTime, days, customDays } = req.body;
     
@@ -232,7 +233,7 @@ router.patch('/:id/schedule', authMiddleware, async (req, res) => {
 // Toggle sold out status for category
 // When sold out: marks all items in this category as out of stock
 // When resumed: marks all items in this category as available
-router.patch('/:id/toggle-soldout', authMiddleware, async (req, res) => {
+router.patch('/:id/toggle-soldout', authenticate, authorize(['admin']), async (req, res) => {
   try {
     const category = await Category.findById(req.params.id);
     if (!category) {
@@ -278,7 +279,7 @@ router.patch('/:id/toggle-soldout', authMiddleware, async (req, res) => {
 // Schedule sold out for category (temporary sold out until specific time)
 // When sold out: marks all items in this category as out of stock
 // When schedule expires: scheduler will mark items as available again
-router.patch('/:id/schedule-soldout', authMiddleware, async (req, res) => {
+router.patch('/:id/schedule-soldout', authenticate, authorize(['admin']), async (req, res) => {
   try {
     const { enabled, endTime } = req.body;
     
@@ -322,7 +323,7 @@ router.patch('/:id/schedule-soldout', authMiddleware, async (req, res) => {
 });
 
 // Delete category
-router.delete('/:id', authMiddleware, async (req, res) => {
+router.delete('/:id', authenticate, authorize(['admin']), async (req, res) => {
   try {
     // Get the category before deleting
     const category = await Category.findById(req.params.id);

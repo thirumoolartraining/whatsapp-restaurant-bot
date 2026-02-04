@@ -3,7 +3,8 @@ const Order = require('../models/Order');
 const Customer = require('../models/Customer');
 const MenuItem = require('../models/MenuItem');
 const DashboardStats = require('../models/DashboardStats');
-const authMiddleware = require('../middleware/auth');
+const authenticate = require('../middleware/authenticate');
+const authorize = require('../middleware/authorize');
 const router = express.Router();
 
 // Helper to get today's date string
@@ -49,7 +50,7 @@ const trackTodayRevenue = async (amount) => {
 // Export for use in other routes
 router.trackTodayRevenue = trackTodayRevenue;
 
-router.get('/dashboard', authMiddleware, async (req, res) => {
+router.get('/dashboard', authenticate, authorize(['admin']), async (req, res) => {
   try {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
@@ -136,7 +137,7 @@ router.get('/dashboard', authMiddleware, async (req, res) => {
   }
 });
 
-router.get('/sales', authMiddleware, async (req, res) => {
+router.get('/sales', authenticate, authorize(['admin']), async (req, res) => {
   try {
     const { days = 7 } = req.query;
     const startDate = new Date();
@@ -154,7 +155,7 @@ router.get('/sales', authMiddleware, async (req, res) => {
   }
 });
 
-router.get('/top-items', authMiddleware, async (req, res) => {
+router.get('/top-items', authenticate, authorize(['admin']), async (req, res) => {
   try {
     const topItems = await Order.aggregate([
       { $unwind: '$items' },
@@ -169,7 +170,7 @@ router.get('/top-items', authMiddleware, async (req, res) => {
 });
 
 // Manual cleanup endpoint (admin only)
-router.post('/cleanup', authMiddleware, async (req, res) => {
+router.post('/cleanup', authenticate, authorize(['admin']), async (req, res) => {
   try {
     const dailyCleanup = require('../services/dailyCleanup');
     const result = await dailyCleanup.manualCleanup();
@@ -184,7 +185,7 @@ router.post('/cleanup', authMiddleware, async (req, res) => {
 });
 
 // Comprehensive Report Endpoint
-router.get('/report', authMiddleware, async (req, res) => {
+router.get('/report', authenticate, authorize(['admin']), async (req, res) => {
   try {
     const ReportHistory = require('../models/ReportHistory');
     const { type, startDate, endDate } = req.query;
@@ -534,7 +535,7 @@ router.get('/report', authMiddleware, async (req, res) => {
 });
 
 // Sync today's revenue from existing delivered orders (admin only)
-router.post('/sync-today-revenue', authMiddleware, async (req, res) => {
+router.post('/sync-today-revenue', authenticate, authorize(['admin']), async (req, res) => {
   try {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
@@ -585,7 +586,7 @@ router.post('/sync-today-revenue', authMiddleware, async (req, res) => {
 });
 
 // Download Report as PDF
-router.post('/report/download-pdf', authMiddleware, async (req, res) => {
+router.post('/report/download-pdf', authenticate, authorize(['admin']), async (req, res) => {
   try {
     const { reportData, reportType } = req.body;
     const { generateReportPdf } = require('../services/reportPdf');
@@ -604,7 +605,7 @@ router.post('/report/download-pdf', authMiddleware, async (req, res) => {
 });
 
 // Send Report via Email
-router.post('/report/send-email', authMiddleware, async (req, res) => {
+router.post('/report/send-email', authenticate, authorize(['admin']), async (req, res) => {
   try {
     const { reportData, reportType } = req.body;
     const { generateReportPdf } = require('../services/reportPdf');
@@ -644,7 +645,7 @@ router.post('/report/send-email', authMiddleware, async (req, res) => {
 });
 
 // Get Storage Stats (MongoDB + Cloudinary)
-router.get('/storage', authMiddleware, async (req, res) => {
+router.get('/storage', authenticate, authorize(['admin']), async (req, res) => {
   try {
     const mongoose = require('mongoose');
     const cloudinary = require('cloudinary').v2;

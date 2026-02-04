@@ -27,33 +27,27 @@ router.post('/login', async (req, res) => {
   try {
     const { username, password } = req.body;
     
-    // Check env credentials first
-    if (username === process.env.ADMIN_USERNAME && password === process.env.ADMIN_PASSWORD) {
-      // Find or create admin user in database for push token storage
-      let adminUser = await User.findOne({ username });
-      if (!adminUser) {
-        // Create admin user in database (password won't be used since we check env first)
-        adminUser = new User({ 
-          username, 
-          password: require('crypto').randomBytes(32).toString('hex'),
-          role: 'admin' 
-        });
-        await adminUser.save();
-        console.log('📱 Created admin user in database for push notifications');
-      }
-      
-      // Include user ID in token so push token can be saved
-      const token = jwt.sign({ id: adminUser._id, username, role: 'admin' }, process.env.JWT_SECRET, { expiresIn: '24h' });
-      return res.json({ token, user: { username, role: 'admin' } });
-    }
+    /*
+     Phase 2 Step 3:
+     Admin access requires authenticated JWT + explicit admin role/flag.
+     No runtime env-based bypass.
+    */
 
     const user = await User.findOne({ username });
     if (!user || !(await user.comparePassword(password))) {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
 
-    const token = jwt.sign({ id: user._id, username: user.username, role: user.role }, process.env.JWT_SECRET, { expiresIn: '24h' });
-    res.json({ token, user: { username: user.username, role: user.role } });
+    // Include role in token - support both role field and isAdmin mapping
+    const tokenPayload = { id: user._id, username: user.username };
+    if (user.role === 'admin') {
+      tokenPayload.role = 'admin';
+    } else if (user.isAdmin === true) {
+      tokenPayload.isAdmin = true;
+    }
+
+    const token = jwt.sign(tokenPayload, process.env.JWT_SECRET, { expiresIn: '24h' });
+    res.json({ token, user: { username: user.username, role: user.role || (user.isAdmin ? 'admin' : 'user') } });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -160,3 +154,11 @@ router.post('/test-notification', async (req, res) => {
 });
 
 module.exports = router;
+
+// STEP 2-3 COMPLETE WHEN:
+// [ ] No admin route grants access without authenticate
+// [ ] Admin-only routes enforce authorize(["admin"]) consistently
+// [ ] No runtime env-based admin bypass remains
+// [ ] Admin identity is explicit in JWT payload (role or isAdmin)
+// [ ] No chatbot/whatsapp/webhook logic changed
+// [ ] Reverting commit restores previous behavior

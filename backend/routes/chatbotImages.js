@@ -1,9 +1,10 @@
 const express = require('express');
 const router = express.Router();
 const ChatbotImage = require('../models/ChatbotImage');
+const authenticate = require('../middleware/authenticate');
+const authorize = require('../middleware/authorize');
 const cloudinaryService = require('../services/cloudinary');
 const chatbotImagesService = require('../services/chatbotImages');
-const auth = require('../middleware/auth');
 const multer = require('multer');
 
 // Configure multer for memory storage
@@ -222,7 +223,7 @@ const defaultImages = [
 ];
 
 // Initialize default images if not exist
-router.post('/init', auth, async (req, res) => {
+router.post('/init', authenticate, authorize(['admin']), async (req, res) => {
   try {
     for (const img of defaultImages) {
       await ChatbotImage.findOneAndUpdate(
@@ -238,7 +239,7 @@ router.post('/init', auth, async (req, res) => {
 });
 
 // Get all chatbot images
-router.get('/', auth, async (req, res) => {
+router.get('/', authenticate, authorize(['admin']), async (req, res) => {
   try {
     let images = await ChatbotImage.find().sort('name');
     

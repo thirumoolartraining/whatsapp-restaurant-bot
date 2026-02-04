@@ -1,14 +1,15 @@
 const express = require('express');
 const router = express.Router();
 const HeroSection = require('../models/HeroSection');
-const auth = require('../middleware/auth');
+const authenticate = require('../middleware/authenticate');
+const authorize = require('../middleware/authorize');
 const cloudinary = require('../services/cloudinary');
 const multer = require('multer');
 
 const upload = multer({ storage: multer.memoryStorage() });
 
 // Get all hero sections (admin)
-router.get('/', auth, async (req, res) => {
+router.get('/', authenticate, authorize(['admin']), async (req, res) => {
   try {
     const heroes = await HeroSection.find().sort({ order: 1, createdAt: -1 });
     res.json(heroes);
@@ -18,7 +19,7 @@ router.get('/', auth, async (req, res) => {
 });
 
 // Create hero section
-router.post('/', auth, upload.single('image'), async (req, res) => {
+router.post('/', authenticate, authorize(['admin']), upload.single('image'), async (req, res) => {
   try {
     const { title, subtitle, description, buttonText, buttonLink, isActive, order } = req.body;
     
@@ -52,7 +53,7 @@ router.post('/', auth, upload.single('image'), async (req, res) => {
 });
 
 // Update hero section
-router.put('/:id', auth, upload.single('image'), async (req, res) => {
+router.put('/:id', authenticate, authorize(['admin']), upload.single('image'), async (req, res) => {
   try {
     const { title, subtitle, description, buttonText, buttonLink, isActive, order } = req.body;
     
@@ -82,7 +83,7 @@ router.put('/:id', auth, upload.single('image'), async (req, res) => {
 });
 
 // Delete hero section
-router.delete('/:id', auth, async (req, res) => {
+router.delete('/:id', authenticate, authorize(['admin']), async (req, res) => {
   try {
     const hero = await HeroSection.findByIdAndDelete(req.params.id);
     if (!hero) return res.status(404).json({ error: 'Hero section not found' });
@@ -93,7 +94,7 @@ router.delete('/:id', auth, async (req, res) => {
 });
 
 // Toggle active status
-router.patch('/:id/toggle', auth, async (req, res) => {
+router.patch('/:id/toggle', authenticate, authorize(['admin']), async (req, res) => {
   try {
     const hero = await HeroSection.findById(req.params.id);
     if (!hero) return res.status(404).json({ error: 'Hero section not found' });
