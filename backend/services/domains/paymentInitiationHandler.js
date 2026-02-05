@@ -11,6 +11,9 @@ const Settings = require('../../models/Settings');
 const whatsapp = require('../whatsapp');
 const chatbotImagesService = require('../chatbotImages');
 const conversationState = require('../conversationState');
+const Logger = require('../logger');
+
+const logger = new Logger('paymentInitiationHandler');
 
 // Haversine formula to calculate straight-line distance between two coordinates in KM
 const calculateStraightLineDistance = (lat1, lon1, lat2, lon2) => {
@@ -35,16 +38,6 @@ const calculateDeliveryCharge = async (customerLat, customerLon) => {
     const restaurantLocation = await Settings.getValue('restaurantLocation');
     const deliverySettings = await Settings.getValue('deliverySettings');
     
-    // If settings not configured, no delivery charge
-    if (!restaurantLocation?.latitude || !restaurantLocation?.longitude) {
-      console.log('📍 Restaurant location not configured - no delivery charge');
-      return { charge: 0, distance: null, withinFreeRadius: true, message: null };
-    }
-    
-    if (!deliverySettings) {
-      console.log('🚚 Delivery settings not configured - no delivery charge');
-      return { charge: 0, distance: null, withinFreeRadius: true, message: null };
-    }
     
     // Calculate RADIUS distance (straight-line) - not road distance
     const distance = calculateStraightLineDistance(
@@ -54,10 +47,6 @@ const calculateDeliveryCharge = async (customerLat, customerLon) => {
       customerLon
     );
     
-    if (distance === null) {
-      console.log('📍 Could not calculate distance - no delivery charge');
-      return { charge: 0, distance: null, withinFreeRadius: true, message: null };
-    }
     
     const noFreeDelivery = deliverySettings.noFreeDelivery || false;
     const baseDeliveryCharge = deliverySettings.baseDeliveryCharge || 0;
@@ -133,16 +122,21 @@ const calculateDeliveryCharge = async (customerLat, customerLon) => {
   }
 };
 
-async function handleSelectPaymentMethod(phone, customer, state = {}) {
-  const freshCustomer = await Customer.findOne({ phone }).populate('cart.menuItem');
+async function handleSelectPaymentMethod(phone, customer, state = {}, correlationId = null, messageId = null) {
+  logger.logDomainHandlerEntry('payment', 'handleSelectPaymentMethod', ['phone', 'customer', 'state'], correlationId, messageId);
   
-  if (!freshCustomer?.cart?.length) {
-    await whatsapp.sendButtons(phone, '🛒 Your cart is empty!', [
-      { id: 'view_menu', text: 'View Menu' },
-      { id: 'home', text: 'Main Menu' }
-    ]);
-    return;
-  }
+  try {
+    const freshCustomer = await Customer.findOne({ phone }).populate('cart.menuItem');
+    
+    if (!freshCustomer?.cart?.length) {
+      await whatsapp.sendButtons(phone, '🛒 Your cart is empty!', [
+        { id: 'view_menu', text: 'View Menu' },
+        { id: 'home', text: 'Main Menu' }
+      ]);
+      
+      logger.logDomainHandlerExit('payment', 'handleSelectPaymentMethod', true, 'cart_empty', correlationId, messageId);
+      return;
+    }
 
   const currentState = await conversationState.getState(null, { phone });
 
@@ -216,16 +210,27 @@ async function handleSelectPaymentMethod(phone, customer, state = {}) {
     { id: 'pay_cod', text: 'COD' },
     { id: 'clear_cart', text: 'Cancel' }
   ]);
+  
+  logger.logDomainHandlerExit('payment', 'handleSelectPaymentMethod', true, 'payment_method_selection', correlationId, messageId);
+  } catch (error) {
+    logger.logDomainHandlerExit('payment', 'handleSelectPaymentMethod', false, null, correlationId, messageId);
+    throw error;
+  }
 }
 
-async function handleSelectPickupPaymentMethod(phone, customer) {
-  const freshCustomer = await Customer.findOne({ phone }).populate('cart.menuItem');
-  if (!freshCustomer || !freshCustomer.cart?.length) {
-    await whatsapp.sendButtons(phone, '🛒 Your cart is empty!', [
-      { id: 'view_menu', text: 'View Menu' }
-    ]);
-    return;
-  }
+async function handleSelectPickupPaymentMethod(phone, customer, correlationId = null, messageId = null) {
+  logger.logDomainHandlerEntry('payment', 'handleSelectPickupPaymentMethod', ['phone', 'customer'], correlationId, messageId);
+  
+  try {
+    const freshCustomer = await Customer.findOne({ phone }).populate('cart.menuItem');
+    if (!freshCustomer || !freshCustomer.cart?.length) {
+      await whatsapp.sendButtons(phone, '🛒 Your cart is empty!', [
+        { id: 'view_menu', text: 'View Menu' }
+      ]);
+      
+      logger.logDomainHandlerExit('payment', 'handleSelectPickupPaymentMethod', true, 'cart_empty', correlationId, messageId);
+      return;
+    }
 
   let total = 0;
   const items = [];
@@ -254,12 +259,21 @@ async function handleSelectPickupPaymentMethod(phone, customer) {
     { id: 'pickup_pay_hotel', text: 'Pay at Hotel' },
     { id: 'pickup_pay_upi', text: 'UPI/App' }
   ], 'Select payment method');
+  
+  logger.logDomainHandlerExit('payment', 'handleSelectPickupPaymentMethod', true, 'pickup_payment_method_selection', correlationId, messageId);
+  } catch (error) {
+    logger.logDomainHandlerExit('payment', 'handleSelectPickupPaymentMethod', false, null, correlationId, messageId);
+    throw error;
+  }
 }
 
-async function handleInitiateOnlinePayment(phone, customer, state, confirmationResult) {
-  const { order, items, total, freshCustomer, orderId } = confirmationResult;
+async function handleInitiateOnlinePayment(phone, customer, state, confirmationResult, correlationId = null, messageId = null) {
+  logger.logDomainHandlerEntry('payment', 'handleInitiateOnlinePayment', ['phone', 'customer', 'state', 'confirmationResult'], correlationId, messageId);
   
-  await order.save();
+  try {
+    const { order, items, total, freshCustomer, orderId } = confirmationResult;
+    
+    await order.save();
 
   const whatsappBroadcast = require('../whatsappBroadcast');
   await whatsappBroadcast.addContact(freshCustomer.phone, freshCustomer.name, new Date());
@@ -307,7 +321,6 @@ async function handleInitiateOnlinePayment(phone, customer, state, confirmationR
         });
       }
     }
-    if (admins.length > 0) console.log(`📱 Admin push sent for UPI order ${orderId}`);
   } catch (pushErr) {
     console.error('Admin push error:', pushErr.message);
   }
@@ -328,6 +341,9 @@ async function handleInitiateOnlinePayment(phone, customer, state, confirmationR
 
     const orderDetailsImageUrl = await chatbotImagesService.getImageUrl('order_details');
     await whatsapp.sendOrder(phone, order, items, paymentPageUrl, orderDetailsImageUrl);
+    
+    logger.logDomainHandlerExit('payment', 'handleInitiateOnlinePayment', true, 'payment_initiated', correlationId, messageId);
+    
     return { success: true };
   } catch (err) {
     console.error('Payment page error:', err);
@@ -338,20 +354,33 @@ async function handleInitiateOnlinePayment(phone, customer, state, confirmationR
         { id: 'home', text: 'Main Menu' }
       ]
     );
+    
+    logger.logDomainHandlerExit('payment', 'handleInitiateOnlinePayment', true, 'payment_initiated_fallback', correlationId, messageId);
+    
     return { success: true };
+  }
+  } catch (error) {
+    logger.logDomainHandlerExit('payment', 'handleInitiateOnlinePayment', false, null, correlationId, messageId);
+    throw error;
   }
 }
 
-async function handleInitiateCOD(phone, customer, state) {
-  const freshCustomer = await Customer.findOne({ phone }).populate('cart.menuItem');
+async function handleInitiateCOD(phone, customer, state, correlationId = null, messageId = null) {
+  logger.logDomainHandlerEntry('payment', 'handleInitiateCOD', ['phone', 'customer', 'state'], correlationId, messageId);
   
-  if (!freshCustomer?.cart?.length) {
-    await whatsapp.sendButtons(phone, '🛒 Your cart is empty!', [
-      { id: 'view_menu', text: 'View Menu' },
-      { id: 'home', text: 'Main Menu' }
-    ]);
-    return { success: false };
-  }
+  try {
+    const freshCustomer = await Customer.findOne({ phone }).populate('cart.menuItem');
+    
+    if (!freshCustomer?.cart?.length) {
+      await whatsapp.sendButtons(phone, '🛒 Your cart is empty!', [
+        { id: 'view_menu', text: 'View Menu' },
+        { id: 'home', text: 'Main Menu' }
+      ]);
+      
+      logger.logDomainHandlerExit('payment', 'handleInitiateCOD', true, 'cart_empty', correlationId, messageId);
+      
+      return { success: false };
+    }
 
   const currentState = await conversationState.getState(null, { phone });
   let itemsTotal = 0;
@@ -410,8 +439,6 @@ async function handleInitiateCOD(phone, customer, state) {
     trackingUpdates: [{ status: 'confirmed', message: 'Order confirmed - Cash on Delivery' }]
   });
 
-  await order.save();
-  console.log(`✅ COD order created: ${orderId}`);
 
   const whatsappBroadcast = require('../whatsappBroadcast');
   await whatsappBroadcast.addContact(freshCustomer.phone, freshCustomer.name, new Date());
@@ -455,7 +482,13 @@ async function handleInitiateCOD(phone, customer, state) {
   const orderDetailsImageUrl = await chatbotImagesService.getImageUrl('order_details');
   await whatsapp.sendOrder(phone, order, items, null, orderDetailsImageUrl);
 
+  logger.logDomainHandlerExit('payment', 'handleInitiateCOD', true, 'cod_initiated', correlationId, messageId);
+
   return { success: true };
+  } catch (error) {
+    logger.logDomainHandlerExit('payment', 'handleInitiateCOD', false, null, correlationId, messageId);
+    throw error;
+  }
 }
 
 function formatPriceWithOffer(item) {

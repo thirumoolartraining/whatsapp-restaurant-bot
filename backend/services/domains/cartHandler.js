@@ -13,9 +13,12 @@ const { sendWithOptionalImage } = require('../messageProcessor');
 const Customer = require('../../models/Customer');
 const MenuItem = require('../../models/MenuItem');
 const Category = require('../../models/Category');
+const Logger = require('../logger');
+
+const logger = new Logger('cartHandler');
 
 // Helper to check if cart items are still available
-const checkCartAvailability = async (cart) => {
+const checkCartAvailability = async (cart, correlationId = null, messageId = null) => {
   if (!cart || cart.length === 0) return { available: true, unavailableItems: [] };
   
   const unavailableItems = [];
@@ -50,93 +53,156 @@ const checkCartAvailability = async (cart) => {
 const cartHandler = {
   // Handle adding item to cart with quantity
   async handleAddToCart(context) {
-    const { phone, customer, item, quantity } = context;
+    const { phone, customer, item, quantity, correlationId = null, messageId = null } = context;
     
-    customer.cart = customer.cart || [];
-    const existingIndex = customer.cart.findIndex(c => c.menuItem?.toString() === item._id.toString());
+    logger.logDomainHandlerEntry('cart', 'handleAddToCart', ['phone', 'customer', 'item', 'quantity'], correlationId, messageId);
     
-    if (existingIndex >= 0) {
-      customer.cart[existingIndex].quantity += quantity;
-      customer.cart[existingIndex].addedAt = new Date(); // Update timestamp when quantity changes
-    } else {
-      customer.cart.push({ menuItem: item._id, quantity, addedAt: new Date() });
+    try {
+      customer.cart = customer.cart || [];
+      const existingIndex = customer.cart.findIndex(c => c.menuItem?.toString() === item._id.toString());
+      
+      if (existingIndex >= 0) {
+        customer.cart[existingIndex].quantity += quantity;
+        customer.cart[existingIndex].addedAt = new Date(); // Update timestamp when quantity changes
+      } else {
+        customer.cart.push({ menuItem: item._id, quantity, addedAt: new Date() });
+      }
+      
+      await customer.save();
+      await this.sendAddedToCart(phone, item, quantity, customer.cart);
+      
+      logger.logDomainHandlerExit('cart', 'handleAddToCart', true, 'item_added', correlationId, messageId);
+    } catch (error) {
+      logger.logDomainHandlerExit('cart', 'handleAddToCart', false, null, correlationId, messageId);
+      logger.logError(error, 'cartHandler', 'domain_handler', null, correlationId, messageId);
+      throw error;
     }
-    
-    await customer.save();
-    await this.sendAddedToCart(phone, item, quantity, customer.cart);
   },
 
   // Handle removing item from cart by index
   async handleRemoveFromCart(context) {
-    const { phone, customer, index } = context;
+    const { phone, customer, index, correlationId = null, messageId = null } = context;
     
-    if (customer.cart && customer.cart[index]) {
-      customer.cart.splice(index, 1);
-      await customer.save();
-      await this.sendCart(phone, customer);
-      await conversationState.setState(null, { currentStep: 'viewing_cart' }, { phone });
+    logger.logDomainHandlerEntry('cart', 'handleRemoveFromCart', ['phone', 'customer', 'index'], correlationId, messageId);
+    
+    try {
+      if (customer.cart && customer.cart[index]) {
+        customer.cart.splice(index, 1);
+        await customer.save();
+        await this.sendCart(phone, customer);
+        await conversationState.setState(null, { currentStep: 'viewing_cart' }, { phone });
+        
+        logger.logDomainHandlerExit('cart', 'handleRemoveFromCart', true, 'viewing_cart', correlationId, messageId);
+      } else {
+        logger.logDomainHandlerExit('cart', 'handleRemoveFromCart', false, null, correlationId, messageId);
+      }
+    } catch (error) {
+      logger.logDomainHandlerExit('cart', 'handleRemoveFromCart', false, null, correlationId, messageId);
+      logger.logError(error, 'cartHandler', 'domain_handler', null, correlationId, messageId);
+      throw error;
     }
   },
 
   // Handle viewing cart contents
   async handleViewCart(context) {
-    const { phone, customer } = context;
-    await this.sendCart(phone, customer);
-    await conversationState.setState(null, { currentStep: 'viewing_cart' }, { phone });
+    const { phone, customer, correlationId = null, messageId = null } = context;
+    
+    logger.logDomainHandlerEntry('cart', 'handleViewCart', ['phone', 'customer'], correlationId, messageId);
+    
+    try {
+      await this.sendCart(phone, customer);
+      await conversationState.setState(null, { currentStep: 'viewing_cart' }, { phone });
+      
+      logger.logDomainHandlerExit('cart', 'handleViewCart', true, 'viewing_cart', correlationId, messageId);
+    } catch (error) {
+      logger.logDomainHandlerExit('cart', 'handleViewCart', false, null, correlationId, messageId);
+      logger.logError(error, 'cartHandler', 'domain_handler', null, correlationId, messageId);
+      throw error;
+    }
   },
 
   // Handle clearing entire cart
   async handleClearCart(context) {
-    const { phone, customer } = context;
+    const { phone, customer, correlationId = null, messageId = null } = context;
     
-    const itemCount = customer.cart?.length || 0;
-    customer.cart = [];
-    await customer.save();
+    logger.logDomainHandlerEntry('cart', 'handleClearCart', ['phone', 'customer'], correlationId, messageId);
     
-    const cartClearedImageUrl = await chatbotImagesService.getImageUrl('cart_cleared');
-    
-    let message = '🗑️ *Cart Cleared Successfully!*\n\n';
-    if (itemCount > 0) {
-      message += `✅ Removed ${itemCount} item${itemCount > 1 ? 's' : ''} from your cart.\n\n`;
+    try {
+      const itemCount = customer.cart?.length || 0;
+      customer.cart = [];
+      await customer.save();
+      
+      const cartClearedImageUrl = await chatbotImagesService.getImageUrl('cart_cleared');
+      
+      let message = '🗑️ *Cart Cleared Successfully!*\n\n';
+      if (itemCount > 0) {
+        message += `✅ Removed ${itemCount} item${itemCount > 1 ? 's' : ''} from your cart.\n\n`;
+      }
+      message += `🛒 Your cart is now empty and ready for a fresh start!\n\n`;
+      message += `🍽️ Browse our delicious menu and discover your favorites! 😋`;
+      
+      await whatsapp.sendMessage(phone, message);
+      await conversationState.setState(null, { currentStep: 'main_menu' }, { phone });
+      
+      logger.logDomainHandlerExit('cart', 'handleClearCart', true, 'main_menu', correlationId, messageId);
+    } catch (error) {
+      logger.logDomainHandlerExit('cart', 'handleClearCart', false, null, correlationId, messageId);
+      logger.logError(error, 'cartHandler', 'domain_handler', null, correlationId, messageId);
+      throw error;
     }
-    message += `🛒 Your cart is now empty and ready for a fresh start!\n\n`;
-    message += `🍽️ Browse our delicious menu and discover your favorites! 😋`;
-    
-    await whatsapp.sendMessage(phone, message);
-    await conversationState.setState(null, { currentStep: 'main_menu' }, { phone });
   },
 
   // Handle updating item quantity in cart
   async handleUpdateQuantity(context) {
-    const { phone, customer, item, quantity } = context;
+    const { phone, customer, item, quantity, correlationId = null, messageId = null } = context;
     
-    // Check if item already in cart
-    const existingIndex = customer.cart.findIndex(c => c.menuItem?.toString() === item._id.toString());
-    if (existingIndex >= 0) {
-      customer.cart[existingIndex].quantity += quantity;
-      customer.cart[existingIndex].addedAt = new Date(); // Update timestamp when quantity changes
-    } else {
-      customer.cart.push({ menuItem: item._id, quantity, addedAt: new Date() });
+    logger.logDomainHandlerEntry('cart', 'handleUpdateQuantity', ['phone', 'customer', 'item', 'quantity'], correlationId, messageId);
+    
+    try {
+      // Check if item already in cart
+      const existingIndex = customer.cart.findIndex(c => c.menuItem?.toString() === item._id.toString());
+      if (existingIndex >= 0) {
+        customer.cart[existingIndex].quantity += quantity;
+        customer.cart[existingIndex].addedAt = new Date(); // Update timestamp when quantity changes
+      } else {
+        customer.cart.push({ menuItem: item._id, quantity, addedAt: new Date() });
+      }
+      
+      // Save cart immediately to persist the change
+      await customer.save();
+      await this.sendAddedToCart(phone, item, quantity, customer.cart);
+      
+      logger.logDomainHandlerExit('cart', 'handleUpdateQuantity', true, 'quantity_updated', correlationId, messageId);
+    } catch (error) {
+      logger.logDomainHandlerExit('cart', 'handleUpdateQuantity', false, null, correlationId, messageId);
+      logger.logError(error, 'cartHandler', 'domain_handler', null, correlationId, messageId);
+      throw error;
     }
-    
-    // Save cart immediately to persist the change
-    await customer.save();
-    await this.sendAddedToCart(phone, item, quantity, customer.cart);
   },
 
   // Handle cart options menu
   async handleCartOptionsMenu(context) {
-    const { phone } = context;
+    const { phone, correlationId = null, messageId = null } = context;
     
-    const cartOptionsImageUrl = await chatbotImagesService.getImageUrl('cart_options');
-    const message = `🛒 *Cart Options*\n\nWhat would you like to do?`;
+    logger.logDomainHandlerEntry('cart', 'handleCartOptionsMenu', ['phone'], correlationId, messageId);
     
-    await whatsapp.sendButtons(phone, message, [
-      { id: 'view_cart', text: 'View Cart' },
-      { id: 'clear_cart', text: 'Clear Cart' },
-      { id: 'view_menu', text: 'View Menu' },
-      { id: 'home', text: 'Main Menu' }
-    ]);
+    try {
+      const cartOptionsImageUrl = await chatbotImagesService.getImageUrl('cart_options');
+      const message = `🛒 *Cart Options*\n\nWhat would you like to do?`;
+      
+      await whatsapp.sendButtons(phone, message, [
+        { id: 'view_cart', text: 'View Cart' },
+        { id: 'clear_cart', text: 'Clear Cart' },
+        { id: 'view_menu', text: 'View Menu' },
+        { id: 'home', text: 'Main Menu' }
+      ]);
+      
+      logger.logDomainHandlerExit('cart', 'handleCartOptionsMenu', true, 'cart_options', correlationId, messageId);
+    } catch (error) {
+      logger.logDomainHandlerExit('cart', 'handleCartOptionsMenu', false, null, correlationId, messageId);
+      logger.logError(error, 'cartHandler', 'domain_handler', null, correlationId, messageId);
+      throw error;
+    }
   },
 
   // Send cart view to user

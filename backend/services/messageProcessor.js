@@ -7,9 +7,15 @@
 
 const chatbotRouter = require('./chatbotRouter');
 const InboundMessage = require('../models/InboundMessage');
+const Logger = require('./logger');
 const crypto = require('crypto');
 
+const logger = new Logger('messageProcessor');
+
 async function processInboundMessage({ provider, payload, reqId }) {
+  // Generate correlation ID for this message processing flow
+  const correlationId = logger.generateCorrelationId();
+  
   // Normalize inbound Meta payload
   const normalizedMessage = {
     provider: "meta",
@@ -19,14 +25,14 @@ async function processInboundMessage({ provider, payload, reqId }) {
     rawPayload: payload
   };
 
-  // Log once at entry
-  console.log('📨 Message envelope received:', {
-    provider: normalizedMessage.provider,
-    providerMessageId: normalizedMessage.providerMessageId,
-    fromPhone: normalizedMessage.fromPhone,
-    messageType: normalizedMessage.messageType,
-    reqId
-  });
+  // Log inbound message with structured format
+  logger.logMessageProcessing(
+    normalizedMessage.provider,
+    normalizedMessage.providerMessageId,
+    normalizedMessage.fromPhone,
+    normalizedMessage.messageType,
+    correlationId
+  );
 
   // Idempotency check - ensure message processed at most once
   let messageIdForIdempotency = normalizedMessage.providerMessageId;
@@ -38,7 +44,10 @@ async function processInboundMessage({ provider, payload, reqId }) {
     const fallbackData = `${normalizedMessage.fromPhone}${normalizedMessage.messageType}${minuteTimestamp}`;
     messageIdForIdempotency = crypto.createHash('sha256').update(fallbackData).digest('hex').substring(0, 16);
     usedFallback = true;
-    console.log('⚠️  Using fallback message ID for idempotency:', messageIdForIdempotency);
+    logger.warn('Using fallback message ID for idempotency', {
+      fallbackMessageId: messageIdForIdempotency,
+      correlationId
+    });
   }
 
   try {
@@ -52,10 +61,11 @@ async function processInboundMessage({ provider, payload, reqId }) {
     } catch (error) {
       if (error.code === 11000) {
         // Duplicate key - message already processed
-        console.log('🔄 Duplicate message ignored:', {
+        logger.info('Duplicate message ignored', {
           provider: normalizedMessage.provider,
           providerMessageId: messageIdForIdempotency,
-          fromPhone: normalizedMessage.fromPhone
+          fromPhone: normalizedMessage.fromPhone,
+          correlationId
         });
         return; // Exit gracefully for duplicate
       }
@@ -69,15 +79,19 @@ async function processInboundMessage({ provider, payload, reqId }) {
         payload.text,
         payload.messageType,
         payload.selectedId,
-        payload.senderName
+        payload.senderName,
+        correlationId,
+        normalizedMessage.providerMessageId
       );
     } catch (error) {
-      // Rethrow to global error handler
+      // Log error before rethrowing to global error handler
+      logger.logError(error, 'messageProcessor', null, null, correlationId, normalizedMessage.providerMessageId);
       throw error;
     }
 
   } catch (error) {
-    // Rethrow to global error handler
+    // Log error before rethrowing to global error handler
+    logger.logError(error, 'messageProcessor', null, null, correlationId, normalizedMessage.providerMessageId);
     throw error;
   }
 }

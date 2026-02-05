@@ -11,6 +11,9 @@ const Customer = require('../../models/Customer');
 const Order = require('../../models/Order');
 const Settings = require('../../models/Settings');
 const chatbotImagesService = require('../chatbotImages');
+const Logger = require('../logger');
+
+const logger = new Logger('orderHandler');
 const axios = require('axios');
 
 // Helper functions copied from chatbot.js since they're defined there
@@ -22,12 +25,6 @@ const generateOrderId = (serviceType = 'delivery') => {
 // Helper to calculate delivery charge based on customer location
 const calculateDeliveryCharge = async (customerLat, customerLon) => {
   try {
-    // Get restaurant location settings
-    const restaurantLocation = await Settings.getValue('restaurantLocation');
-    if (!restaurantLocation || !restaurantLocation.latitude || !restaurantLocation.longitude) {
-      console.log('Restaurant location not configured');
-      return { charge: 0, distance: null };
-    }
 
     // Calculate straight-line distance first
     const straightLineDistance = calculateStraightLineDistance(
@@ -37,10 +34,6 @@ const calculateDeliveryCharge = async (customerLat, customerLon) => {
       customerLon
     );
 
-    if (!straightLineDistance) {
-      console.log('Could not calculate distance');
-      return { charge: 0, distance: null };
-    }
 
     // Get delivery radius and charge settings
     const deliveryRadius = await Settings.getValue('deliveryRadius') || 5; // Default 5km
@@ -99,20 +92,25 @@ const orderHandler = {
    * Generate and send order summary with payment method options
    * This handles the pre-payment order confirmation flow
    */
-  async handleOrderSummary(phone, customer, state = {}) {
-    // Refresh customer from database to ensure we have latest cart data
-    const freshCustomer = await Customer.findOne({ phone }).populate('cart.menuItem');
+  async handleOrderSummary(phone, customer, state = {}, correlationId = null, messageId = null) {
+    logger.logDomainHandlerEntry('order', 'handleOrderSummary', ['phone', 'customer', 'state'], correlationId, messageId);
     
-    if (!freshCustomer?.cart?.length) {
-      await whatsapp.sendButtons(phone, '🛒 Your cart is empty!', [
-        { id: 'view_menu', text: 'View Menu' },
-        { id: 'home', text: 'Main Menu' }
-      ]);
-      return;
-    }
+    try {
+      // Refresh customer from database to ensure we have latest cart data
+      const freshCustomer = await Customer.findOne({ phone }).populate('cart.menuItem');
+      
+      if (!freshCustomer?.cart?.length) {
+        await whatsapp.sendButtons(phone, '🛒 Your cart is empty!', [
+          { id: 'view_menu', text: 'View Menu' },
+          { id: 'home', text: 'Main Menu' }
+        ]);
+        
+        logger.logDomainHandlerExit('order', 'handleOrderSummary', true, 'cart_empty', correlationId, messageId);
+        return;
+      }
 
-    // Get current state for delivery charge and service type
-    const currentState = await conversationState.getState(null, { phone });
+      // Get current state for delivery charge and service type
+      const currentState = await conversationState.getState(null, { phone });
 
     let itemsTotal = 0;
     let cartMsg = '🛒 *Order Summary*\n\n';
@@ -189,14 +187,21 @@ const orderHandler = {
       { id: 'pay_cod', text: 'COD' },
       { id: 'clear_cart', text: 'Cancel' }
     ]);
-  },
+    
+    logger.logDomainHandlerExit('order', 'handleOrderSummary', true, 'payment_method_selection', correlationId, messageId);
+  } catch (error) {
+    logger.logDomainHandlerExit('order', 'handleOrderSummary', false, null, correlationId, messageId);
+    logger.logError(error, 'orderHandler', 'domain_handler', null, correlationId, messageId);
+    throw error;
+  }
+},
 
   /**
    * Process order confirmation and create order object
    * This handles pre-payment order preparation only
    * Returns order object for payment processing
    */
-  async handleOrderConfirmation(phone, customer, state) {
+  async handleOrderConfirmation(phone, customer, state, correlationId = null, messageId = null) {
     // Refresh customer from database to ensure we have latest cart data
     const freshCustomer = await Customer.findOne({ phone }).populate('cart.menuItem');
     
@@ -283,9 +288,9 @@ const orderHandler = {
   /**
    * Handle place order intent - direct to food type selection
    */
-  async handlePlaceOrderIntent(phone, menuItems) {
+  async handlePlaceOrderIntent(phone, menuItems, correlationId = null, messageId = null) {
     const menuHandler = require('./menuHandler');
-    await menuHandler.handleFoodTypeSelection(phone);
+    await menuHandler.handleFoodTypeSelection(phone, correlationId);
     await conversationState.setState(null, { currentStep: 'select_food_type_order' }, { phone });
   },
 
@@ -343,8 +348,6 @@ const orderHandler = {
         status: 'pending'
       });
 
-      await order.save();
-      console.log(`✅ Pickup order created: ${orderId}`);
 
       // Clear cart
       freshCustomer.cart = [];

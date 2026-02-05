@@ -6,10 +6,37 @@
 */
 
 const chatbot = require('./chatbot');
+const Logger = require('./logger');
 
-function routeMessage(phone, text, messageType, selectedId, senderName) {
-  // Direct delegation to chatbot with identical arguments
-  return chatbot.handleMessage(phone, text, messageType, selectedId, senderName);
+const logger = new Logger('chatbotRouter');
+
+function routeMessage(phone, text, messageType, selectedId, senderName, correlationId = null, messageId = null) {
+  // Simple routing detection based on message content and type
+  let detectedIntent = 'unknown';
+  let selectedDomain = 'chatbot';
+  let selectedHandler = 'handleMessage';
+  
+  // Basic intent detection (can be enhanced later)
+  if (text) {
+    const lowerText = text.toLowerCase();
+    if (lowerText.includes('menu') || lowerText.includes('food') || lowerText.includes('order')) {
+      detectedIntent = 'menu_browsing';
+    } else if (lowerText.includes('cart') || lowerText.includes('add') || lowerText.includes('remove')) {
+      detectedIntent = 'cart_management';
+    } else if (lowerText.includes('payment') || lowerText.includes('pay')) {
+      detectedIntent = 'payment';
+    } else if (lowerText.includes('location') || lowerText.includes('delivery') || lowerText.includes('address')) {
+      detectedIntent = 'location';
+    } else {
+      detectedIntent = 'general_conversation';
+    }
+  }
+  
+  // Log routing decision before delegation
+  logger.logRouting(detectedIntent, selectedDomain, selectedHandler, correlationId, messageId);
+  
+  // Direct delegation to chatbot with identical arguments plus correlationId
+  return chatbot.handleMessage(phone, text, messageType, selectedId, senderName, correlationId);
 }
 
 module.exports = {

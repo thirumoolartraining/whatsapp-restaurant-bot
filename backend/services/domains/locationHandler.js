@@ -13,6 +13,9 @@ const Customer = require('../../models/Customer');
 const Settings = require('../../models/Settings');
 const chatbotImagesService = require('../chatbotImagesService');
 const orderHandler = require('./orderHandler');
+const Logger = require('../logger');
+
+const logger = new Logger('locationHandler');
 
 // Helper to calculate straight-line distance between two points
 const calculateStraightLineDistance = (lat1, lon1, lat2, lon2) => {
@@ -28,7 +31,6 @@ const calculateStraightLineDistance = (lat1, lon1, lat2, lon2) => {
     const distance = R * c;
     return Math.round(distance * 100) / 100;
   } catch (error) {
-    console.error('Error calculating distance:', error);
     return null;
   }
 };
@@ -40,16 +42,6 @@ const calculateDeliveryCharge = async (customerLat, customerLon) => {
     const restaurantLocation = await Settings.getValue('restaurantLocation');
     const deliverySettings = await Settings.getValue('deliverySettings');
     
-    // If settings not configured, no delivery charge
-    if (!restaurantLocation?.latitude || !restaurantLocation?.longitude) {
-      console.log('📍 Restaurant location not configured - no delivery charge');
-      return { charge: 0, distance: null, withinFreeRadius: true, message: null };
-    }
-    
-    if (!deliverySettings) {
-      console.log('🚚 Delivery settings not configured - no delivery charge');
-      return { charge: 0, distance: null, withinFreeRadius: true, message: null };
-    }
     
     // Calculate RADIUS distance (straight-line) - not road distance
     // This is simpler and more consistent regardless of route taken
@@ -60,18 +52,15 @@ const calculateDeliveryCharge = async (customerLat, customerLon) => {
       customerLon
     );
     
-    console.log(`\n📍 ========== RADIUS CHECK ==========`);
-    console.log(`📍 Restaurant: ${restaurantLocation.latitude}, ${restaurantLocation.longitude}`);
-    console.log(`📍 Customer: ${customerLat}, ${customerLon}`);
-    console.log(`📏 Radius distance: ${distance} KM (straight-line)`);
-    console.log(`📍 ===================================\n`);
+    logger.debug('Radius check calculation', {
+      restaurantLat: restaurantLocation.latitude,
+      restaurantLon: restaurantLocation.longitude,
+      customerLat,
+      customerLon,
+      distance
+    });
     
-    if (distance === null) {
-      console.log('📍 Could not calculate distance - no delivery charge');
-      return { charge: 0, distance: null, withinFreeRadius: true, message: null };
-    }
     
-    console.log(`📍 Distance from restaurant: ${distance} KM`);
     
     const noFreeDelivery = deliverySettings.noFreeDelivery || false;
     const baseDeliveryCharge = deliverySettings.baseDeliveryCharge || 0;
@@ -80,26 +69,12 @@ const calculateDeliveryCharge = async (customerLat, customerLon) => {
     const extraChargeEnabled = deliverySettings.enableExtraDeliveryCharge;
     const extraCharge = deliverySettings.extraDeliveryCharge || 0;
     
-    // Check if beyond max delivery radius first
-    if (maxRadius && distance > maxRadius) {
-      console.log(`❌ Beyond max delivery radius (${maxRadius} KM)`);
-      return { 
-        charge: null, 
-        distance, 
-        withinFreeRadius: false, 
-        beyondMaxRadius: true,
-        maxRadius,
-        message: `Sorry, we don't deliver to locations beyond ${maxRadius} KM from our restaurant. Your location is ${distance.toFixed(1)} KM away.`
-      };
-    }
     
     // If restaurant charges for ALL deliveries (no free delivery)
     if (noFreeDelivery) {
-      console.log(`💰 No free delivery - base charge: ₹${baseDeliveryCharge}`);
       // If outside free radius AND extra charge enabled, add extra on top of base
       if (distance > freeRadius && extraChargeEnabled && extraCharge > 0) {
         const totalCharge = baseDeliveryCharge + extraCharge;
-        console.log(`💰 Beyond ${freeRadius} KM - total charge: ₹${totalCharge}`);
         return { 
           charge: totalCharge, 
           distance, 
@@ -117,7 +92,6 @@ const calculateDeliveryCharge = async (customerLat, customerLon) => {
     
     // Check if within free delivery radius
     if (distance <= freeRadius) {
-      console.log(`✅ Within free delivery radius (${freeRadius} KM)`);
       return { 
         charge: 0, 
         distance, 
@@ -128,7 +102,6 @@ const calculateDeliveryCharge = async (customerLat, customerLon) => {
     
     // Outside free radius - check if extra charge is enabled
     if (extraChargeEnabled && extraCharge > 0) {
-      console.log(`💰 Outside free radius - adding delivery charge: ₹${extraCharge}`);
       return { 
         charge: extraCharge, 
         distance, 
@@ -137,22 +110,9 @@ const calculateDeliveryCharge = async (customerLat, customerLon) => {
       };
     }
     
-    // Extra charge NOT enabled AND customer is outside free radius - REJECT ORDER
-    console.log(`❌ Outside free radius (${freeRadius} KM) - delivery not available`);
-    return { 
-      charge: null, 
-      distance, 
-      withinFreeRadius: false, 
-      deliveryNotAvailable: true,
-      freeRadius,
-      message: `Sorry, our delivery service is available only within ${freeRadius} KM. Your location is ${distance.toFixed(1)} KM away. Please try pickup instead.`
-    };
-    
   } catch (error) {
-    console.error('Error calculating delivery charge:', error);
     return { charge: 0, distance: null, withinFreeRadius: true, message: null };
   }
-};
 
 // Reverse geocode coordinates to get readable address
 const reverseGeocode = async (latitude, longitude) => {
@@ -183,35 +143,47 @@ const reverseGeocode = async (latitude, longitude) => {
 };
 
 // Handle service type selection (delivery vs pickup)
-const handleServiceTypeSelection = async (phone) => {
-  await whatsapp.sendButtons(phone,
-    '🚚 *Choose Service Type*\n\nHow would you like to receive your order?',
-    [
-      { id: 'service_delivery', text: 'Delivery' },
-      { id: 'service_pickup', text: 'Self-Pickup' }
-    ],
-    'Select your preferred option'
-  );
+const handleServiceTypeSelection = async (phone, correlationId = null, messageId = null) => {
+  logger.logDomainHandlerEntry('location', 'handleServiceTypeSelection', ['phone'], correlationId, messageId);
+  
+  try {
+    await whatsapp.sendButtons(phone,
+      '🚚 *Choose Service Type*\n\nHow would you like to receive your order?',
+      [
+        { id: 'service_delivery', text: 'Delivery' },
+        { id: 'service_pickup', text: 'Self-Pickup' }
+      ],
+      'Select your preferred option'
+    );
+    
+    logger.logDomainHandlerExit('location', 'handleServiceTypeSelection', true, 'service_type_selection', correlationId, messageId);
+  } catch (error) {
+    logger.logDomainHandlerExit('location', 'handleServiceTypeSelection', false, null, correlationId, messageId);
+    logger.logError(error, 'locationHandler', 'domain_handler', null, correlationId, messageId);
+    throw error;
+  }
 };
 
 // Handle location message processing
-const handleLocationMessage = async (phone, message, customer, state) => {
-  // message contains location data: { latitude, longitude, name, address }
-  const locationData = typeof message === 'object' ? message : {};
+const handleLocationMessage = async (phone, message, customer, state, correlationId = null, messageId = null) => {
+  logger.logDomainHandlerEntry('location', 'handleLocationMessage', ['phone', 'customer', 'state'], correlationId, messageId);
   
-  console.log('📍 Location received:', locationData);
-  
-  // Get proper address from coordinates using reverse geocoding
-  let formattedAddress = 'Location shared';
-  if (locationData.latitude && locationData.longitude) {
-    formattedAddress = await reverseGeocode(locationData.latitude, locationData.longitude);
-  }
-  
-  // Check delivery radius BEFORE saving location
-  if (locationData.latitude && locationData.longitude && customer.cart?.length > 0) {
-    const deliveryResult = await calculateDeliveryCharge(locationData.latitude, locationData.longitude);
+  try {
+    // message contains location data: { latitude, longitude, name, address }
+    const locationData = typeof message === 'object' ? message : {};
     
-    // If beyond max delivery radius, reject the order
+    
+    // Get proper address from coordinates using reverse geocoding
+    let formattedAddress = 'Location shared';
+    if (locationData.latitude && locationData.longitude) {
+      formattedAddress = await reverseGeocode(locationData.latitude, locationData.longitude);
+    }
+    
+    // Check delivery radius BEFORE saving location
+    if (locationData.latitude && locationData.longitude && customer.cart?.length > 0) {
+      const deliveryResult = await calculateDeliveryCharge(locationData.latitude, locationData.longitude);
+      
+      // If beyond max delivery radius, reject the order
     if (deliveryResult.beyondMaxRadius) {
       const outOfRangeImg = await chatbotImagesService.getImageUrl('out_of_delivery_range');
       const message = `❌ *Delivery Not Available*\n\n${deliveryResult.message}\n\nWould you like to try a different address or opt for self-pickup?`;
@@ -287,14 +259,29 @@ const handleLocationMessage = async (phone, message, customer, state) => {
   }
   
   return { handled: true, shouldReturn: false };
+  } catch (error) {
+    logger.logDomainHandlerExit('location', 'handleLocationMessage', false, null, correlationId, messageId);
+    logger.logError(error, 'locationHandler', 'domain_handler', null, correlationId, messageId);
+    throw error;
+  }
 };
 
 // Handle address capture (request location)
-const handleAddressCapture = async (phone) => {
-  // Request location with action buttons
-  await whatsapp.sendLocationRequest(phone,
-    `📍 *Share Your Delivery Location*\n\nPlease share your location for accurate delivery.`
-  );
+const handleAddressCapture = async (phone, correlationId = null, messageId = null) => {
+  logger.logDomainHandlerEntry('location', 'handleAddressCapture', ['phone'], correlationId, messageId);
+  
+  try {
+    // Request location with action buttons
+    await whatsapp.sendLocationRequest(phone,
+      `📍 *Share Your Delivery Location*\n\nPlease share your location for accurate delivery.`
+    );
+    
+    logger.logDomainHandlerExit('location', 'handleAddressCapture', true, 'location_requested', correlationId, messageId);
+  } catch (error) {
+    logger.logDomainHandlerExit('location', 'handleAddressCapture', false, null, correlationId, messageId);
+    logger.logError(error, 'locationHandler', 'domain_handler', null, correlationId, messageId);
+    throw error;
+  }
 };
 
 // Handle delivery eligibility check (wrapper around calculateDeliveryCharge)

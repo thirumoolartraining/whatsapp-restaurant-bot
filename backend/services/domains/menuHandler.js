@@ -9,6 +9,9 @@ const conversationState = require('../conversationState');
 const whatsapp = require('../whatsapp');
 const chatbotImagesService = require('../chatbotImagesService');
 const { sendWithOptionalImage, formatPriceWithOffer } = require('../messageUtils');
+const Logger = require('../logger');
+
+const logger = new Logger('menuHandler');
 
 // Helper to filter items by food type preference
 const filterByFoodType = (menuItems, preference) => {
@@ -20,38 +23,58 @@ const filterByFoodType = (menuItems, preference) => {
 };
 
 // Handle food type selection screen
-const handleFoodTypeSelection = async (phone) => {
-  const browseMenuImageUrl = await chatbotImagesService.getImageUrl('browse_menu');
-  await sendWithOptionalImage(phone, browseMenuImageUrl,
-    '🍽️ *Browse Menu*\n\nWhat would you like to see?',
-    [
-      { id: 'food_veg', text: 'Veg Only' },
-      { id: 'food_nonveg', text: 'Non-Veg Only' },
-      { id: 'food_both', text: 'Show All' }
-    ]
-  );
+const handleFoodTypeSelection = async (phone, correlationId = null, messageId = null) => {
+  logger.logDomainHandlerEntry('menu', 'handleFoodTypeSelection', ['phone'], correlationId, messageId);
+  
+  try {
+    const browseMenuImageUrl = await chatbotImagesService.getImageUrl('browse_menu');
+    await sendWithOptionalImage(phone, browseMenuImageUrl,
+      '🍽️ *Browse Menu*\n\nWhat would you like to see?',
+      [
+        { id: 'food_veg', text: 'Veg Only' },
+        { id: 'food_nonveg', text: 'Non-Veg Only' },
+        { id: 'food_both', text: 'Show All' }
+      ]
+    );
+    
+    logger.logDomainHandlerExit('menu', 'handleFoodTypeSelection', true, 'food_type_selection', correlationId, messageId);
+  } catch (error) {
+    logger.logDomainHandlerExit('menu', 'handleFoodTypeSelection', false, null, correlationId, messageId);
+    logger.logError(error, 'menuHandler', 'domain_handler', null, correlationId, messageId);
+    throw error;
+  }
 };
 
 // Handle showing menu categories based on food type preference
-const handleShowMenuCategories = async (phone, menuItems, foodType, label) => {
-  await conversationState.setState(null, { foodTypePreference: foodType }, { phone });
-  const filteredItems = filterByFoodType(menuItems, foodType);
+const handleShowMenuCategories = async (phone, menuItems, foodType, label, correlationId = null, messageId = null) => {
+  logger.logDomainHandlerEntry('menu', 'handleShowMenuCategories', ['phone', 'menuItems', 'foodType', 'label'], correlationId, messageId);
   
-  if (filteredItems.length > 0) {
-    await sendMenuCategoriesWithLabel(phone, filteredItems, label);
-    await conversationState.setState(null, { currentStep: 'select_category' }, { phone });
-  } else {
-    const noItemsMessage = `No ${foodType} items available right now.`;
-    await whatsapp.sendButtons(phone, noItemsMessage, [
-      { id: 'view_menu', text: 'View All Menu' },
-      { id: 'home', text: 'Main Menu' }
-    ]);
-    await conversationState.setState(null, { currentStep: 'main_menu' }, { phone });
+  try {
+    await conversationState.setState(null, { foodTypePreference: foodType }, { phone });
+    const filteredItems = filterByFoodType(menuItems, foodType);
+    
+    if (filteredItems.length > 0) {
+      await sendMenuCategoriesWithLabel(phone, filteredItems, label);
+      await conversationState.setState(null, { currentStep: 'select_category' }, { phone });
+      logger.logDomainHandlerExit('menu', 'handleShowMenuCategories', true, 'select_category', correlationId, messageId);
+    } else {
+      const noItemsMessage = `No ${foodType} items available right now.`;
+      await whatsapp.sendButtons(phone, noItemsMessage, [
+        { id: 'view_menu', text: 'View All Menu' },
+        { id: 'home', text: 'Main Menu' }
+      ]);
+      await conversationState.setState(null, { currentStep: 'main_menu' }, { phone });
+      logger.logDomainHandlerExit('menu', 'handleShowMenuCategories', true, 'main_menu', correlationId, messageId);
+    }
+  } catch (error) {
+    logger.logDomainHandlerExit('menu', 'handleShowMenuCategories', false, null, correlationId, messageId);
+    logger.logError(error, 'menuHandler', 'domain_handler', null, correlationId, messageId);
+    throw error;
   }
 };
 
 // Handle food type selection from buttons
-const handleFoodTypeSelectionResponse = async (phone, menuItems, selection) => {
+const handleFoodTypeSelectionResponse = async (phone, menuItems, selection, correlationId = null, messageId = null) => {
   const foodType = selection.replace('food_', '');
   await conversationState.setState(null, { foodTypePreference: foodType }, { phone });
   
@@ -147,26 +170,40 @@ const sendMenuCategoriesWithLabel = async (phone, menuItems, label, page = 0) =>
 };
 
 // Handle category selection for browsing
-const handleCategorySelection = async (phone, menuItems, selection) => {
-  if (selection === 'cat_all') {
-    // Show all items from all categories (within selected food type)
-    const currentState = await conversationState.getState(null, { phone });
-    const preference = currentState.foodTypePreference || 'both';
-    const filteredItems = filterByFoodType(menuItems, preference);
-    console.log('🍽️ All items selected - Food preference:', preference, 'Total items:', filteredItems.length);
-    await sendAllItems(phone, filteredItems);
-    await conversationState.setState(null, { selectedCategory: 'all', currentStep: 'viewing_items' }, { phone });
-  } else if (selection.startsWith('cat_')) {
-    const sanitizedCat = selection.replace('cat_', '');
-    const currentState = await conversationState.getState(null, { phone });
-    const preference = currentState.foodTypePreference || 'both';
-    const filteredItems = filterByFoodType(menuItems, preference);
-    // Find original category name from sanitized ID
-    const allCategories = [...new Set(filteredItems.flatMap(m => Array.isArray(m.category) ? m.category : [m.category]))];
-    const category = allCategories.find(c => c.replace(/[^a-zA-Z0-9_]/g, '_') === sanitizedCat) || sanitizedCat;
-    console.log('🍽️ Category selected:', category);
-    await sendCategoryItems(phone, filteredItems, category);
-    await conversationState.setState(null, { selectedCategory: category, currentStep: 'viewing_items' }, { phone });
+const handleCategorySelection = async (phone, menuItems, selection, correlationId = null, messageId = null) => {
+  logger.logDomainHandlerEntry('menu', 'handleCategorySelection', ['phone', 'menuItems', 'selection'], correlationId, messageId);
+  
+  try {
+    if (selection === 'cat_all') {
+      // Show all items from all categories (within selected food type)
+      const currentState = await conversationState.getState(null, { phone });
+      const preference = currentState.foodTypePreference || 'both';
+      const filteredItems = filterByFoodType(menuItems, preference);
+      
+      
+      await sendAllItems(phone, filteredItems);
+      await conversationState.setState(null, { selectedCategory: 'all', currentStep: 'viewing_items' }, { phone });
+      
+      logger.logDomainHandlerExit('menu', 'handleCategorySelection', true, 'viewing_items', correlationId, messageId);
+    } else if (selection.startsWith('cat_')) {
+      const sanitizedCat = selection.replace('cat_', '');
+      const currentState = await conversationState.getState(null, { phone });
+      const preference = currentState.foodTypePreference || 'both';
+      const filteredItems = filterByFoodType(menuItems, preference);
+      // Find original category name from sanitized ID
+      const allCategories = [...new Set(filteredItems.flatMap(m => Array.isArray(m.category) ? m.category : [m.category]))];
+      const category = allCategories.find(c => c.replace(/[^a-zA-Z0-9_]/g, '_') === sanitizedCat) || sanitizedCat;
+      
+      
+      await sendCategoryItems(phone, filteredItems, category);
+      await conversationState.setState(null, { selectedCategory: category, currentStep: 'viewing_items' }, { phone });
+      
+      logger.logDomainHandlerExit('menu', 'handleCategorySelection', true, 'viewing_items', correlationId, messageId);
+    }
+  } catch (error) {
+    logger.logDomainHandlerExit('menu', 'handleCategorySelection', false, null, correlationId, messageId);
+    logger.logError(error, 'menuHandler', 'domain_handler', null, correlationId, messageId);
+    throw error;
   }
 };
 
@@ -272,7 +309,7 @@ const sendAllItems = async (phone, menuItems, page = 0) => {
 };
 
 // Handle menu pagination for categories
-const handleMenuPagination = async (phone, menuItems, selection) => {
+const handleMenuPagination = async (phone, menuItems, selection, correlationId = null, messageId = null) => {
   if (selection.startsWith('menucat_page_')) {
     const page = parseInt(selection.replace('menucat_page_', ''));
     const currentState = await conversationState.getState(null, { phone });
@@ -421,24 +458,39 @@ const sendAllItemsForOrder = async (phone, menuItems, page = 0) => {
 };
 
 // Handle category selection for ordering
-const handleCategorySelectionForOrder = async (phone, menuItems, selection) => {
-  if (selection === 'order_cat_all') {
-    // Show all items for ordering (within selected food type)
-    const currentState = await conversationState.getState(null, { phone });
-    const filteredItems = filterByFoodType(menuItems, currentState.foodTypePreference || 'both');
-    console.log('🍽️ All items for order - Total items:', filteredItems.length);
-    await sendAllItemsForOrder(phone, filteredItems);
-    await conversationState.setState(null, { selectedCategory: 'all', currentStep: 'selecting_item' }, { phone });
-  } else if (selection.startsWith('order_cat_')) {
-    const sanitizedCat = selection.replace('order_cat_', '');
-    const currentState = await conversationState.getState(null, { phone });
-    const filteredItems = filterByFoodType(menuItems, currentState.foodTypePreference || 'both');
-    // Find original category name from sanitized ID
-    const allCategories = [...new Set(filteredItems.flatMap(m => Array.isArray(m.category) ? m.category : [m.category]))];
-    const category = allCategories.find(c => c.replace(/[^a-zA-Z0-9_]/g, '_') === sanitizedCat) || sanitizedCat;
-    console.log('🍽️ Category for order:', category);
-    await sendCategoryItemsForOrder(phone, filteredItems, category);
-    await conversationState.setState(null, { selectedCategory: category, currentStep: 'selecting_item' }, { phone });
+const handleCategorySelectionForOrder = async (phone, menuItems, selection, correlationId = null, messageId = null) => {
+  logger.logDomainHandlerEntry('menu', 'handleCategorySelectionForOrder', ['phone', 'menuItems', 'selection'], correlationId, messageId);
+  
+  try {
+    if (selection === 'order_cat_all') {
+      // Show all items for ordering (within selected food type)
+      const currentState = await conversationState.getState(null, { phone });
+      const filteredItems = filterByFoodType(menuItems, currentState.foodTypePreference || 'both');
+      
+      
+      await sendAllItemsForOrder(phone, filteredItems);
+      await conversationState.setState(null, { selectedCategory: 'all', currentStep: 'selecting_item' }, { phone });
+      
+      logger.logDomainHandlerExit('menu', 'handleCategorySelectionForOrder', true, 'selecting_item', correlationId, messageId);
+    } else if (selection.startsWith('order_cat_')) {
+      const sanitizedCat = selection.replace('order_cat_', '');
+      const currentState = await conversationState.getState(null, { phone });
+      const preference = currentState.foodTypePreference || 'both';
+      const filteredItems = filterByFoodType(menuItems, preference);
+      // Find original category name from sanitized ID
+      const allCategories = [...new Set(filteredItems.flatMap(m => Array.isArray(m.category) ? m.category : [m.category]))];
+      const category = allCategories.find(c => c.replace(/[^a-zA-Z0-9_]/g, '_') === sanitizedCat) || sanitizedCat;
+      
+      
+      await sendCategoryItemsForOrder(phone, filteredItems, category);
+      await conversationState.setState(null, { selectedCategory: category, currentStep: 'selecting_item' }, { phone });
+      
+      logger.logDomainHandlerExit('menu', 'handleCategorySelectionForOrder', true, 'selecting_item', correlationId, messageId);
+    }
+  } catch (error) {
+    logger.logDomainHandlerExit('menu', 'handleCategorySelectionForOrder', false, null, correlationId, messageId);
+    logger.logError(error, 'menuHandler', 'domain_handler', null, correlationId, messageId);
+    throw error;
   }
 };
 

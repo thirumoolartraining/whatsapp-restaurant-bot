@@ -13,43 +13,62 @@ const brevoMail = require('../brevoMail');
 const chatbotImagesService = require('../chatbotImages');
 const googleSheets = require('../googleSheets');
 const conversationState = require('../conversationState');
+const Logger = require('../logger');
 
-async function handlePaymentStatusUpdate(context) {
-  const { orderId, razorpay_payment_id, razorpay_order_id, razorpay_signature } = context;
+const logger = new Logger('paymentCompletionHandler');
+
+async function handlePaymentStatusUpdate(context, correlationId = null, messageId = null) {
+  logger.logDomainHandlerEntry('payment', 'handlePaymentStatusUpdate', ['context'], correlationId, messageId);
   
-  // Verify signature
-  const body = razorpay_order_id + '|' + razorpay_payment_id;
-  const expectedSignature = crypto
-    .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
-    .update(body)
-    .digest('hex');
+  try {
+    const { orderId, razorpay_payment_id, razorpay_order_id, razorpay_signature } = context;
+    
+    // Verify signature
+    const body = razorpay_order_id + '|' + razorpay_payment_id;
+    const expectedSignature = crypto
+      .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
+      .update(body)
+      .digest('hex');
 
-  if (expectedSignature !== razorpay_signature) {
-    return { success: false, error: 'Invalid payment signature' };
+    if (expectedSignature !== razorpay_signature) {
+      logger.logDomainHandlerExit('payment', 'handlePaymentStatusUpdate', false, 'invalid_signature', correlationId, messageId);
+      return { success: false, error: 'Invalid payment signature' };
+    }
+
+    // Find and update order
+    const order = await Order.findOne({ orderId });
+    if (!order) {
+      logger.logDomainHandlerExit('payment', 'handlePaymentStatusUpdate', false, 'order_not_found', correlationId, messageId);
+      return { success: false, error: 'Order not found' };
+    }
+
+    const result = await handlePaymentSuccess(order, razorpay_payment_id);
+    
+    logger.logDomainHandlerExit('payment', 'handlePaymentStatusUpdate', true, 'payment_status_updated', correlationId, messageId);
+    
+    return result;
+  } catch (error) {
+    logger.logDomainHandlerExit('payment', 'handlePaymentStatusUpdate', false, null, correlationId, messageId);
+    throw error;
   }
-
-  // Find and update order
-  const order = await Order.findOne({ orderId });
-  if (!order) {
-    return { success: false, error: 'Order not found' };
-  }
-
-  return await handlePaymentSuccess(order, razorpay_payment_id);
 }
 
-async function handlePaymentSuccess(order, razorpay_payment_id = null) {
-  order.paymentStatus = 'paid';
-  if (razorpay_payment_id) {
-    order.paymentId = razorpay_payment_id;
-    order.razorpayPaymentId = razorpay_payment_id;
-  }
-  order.status = 'confirmed';
-  order.trackingUpdates.push({ 
-    status: 'confirmed', 
-    message: 'Payment received via UPI', 
-    timestamp: new Date() 
-  });
-  await order.save();
+async function handlePaymentSuccess(order, razorpay_payment_id = null, correlationId = null, messageId = null) {
+  logger.logDomainHandlerEntry('payment', 'handlePaymentSuccess', ['order', 'razorpay_payment_id'], correlationId, messageId);
+  
+  try {
+    order.paymentStatus = 'paid';
+    if (razorpay_payment_id) {
+      order.paymentId = razorpay_payment_id;
+      order.razorpayPaymentId = razorpay_payment_id;
+    }
+    order.status = 'confirmed';
+    order.trackingUpdates.push({ 
+      status: 'confirmed', 
+      message: 'Payment received via UPI', 
+      timestamp: new Date() 
+    });
+    await order.save();
 
   // Emit event for real-time updates
   const dataEvents = require('../eventEmitter');
@@ -119,19 +138,27 @@ async function handlePaymentSuccess(order, razorpay_payment_id = null) {
     await customer.save();
   }
 
-  console.log(`✅ UPI Payment verified for order ${order.orderId}`);
+  
+  logger.logDomainHandlerExit('payment', 'handlePaymentSuccess', true, 'payment_successful', correlationId, messageId);
+  
   return { success: true, message: 'Payment verified successfully' };
+  } catch (error) {
+    logger.logDomainHandlerExit('payment', 'handlePaymentSuccess', false, null, correlationId, messageId);
+    throw error;
+  }
 }
 
-async function handleWebhookPaymentSuccess(order, payment) {
-  if (order.paymentStatus !== 'paid') {
-    order.paymentStatus = 'paid';
-    order.razorpayPaymentId = payment.id;
-    order.status = 'confirmed';
-    order.trackingUpdates.push({ status: 'confirmed', message: 'Payment received via webhook', timestamp: new Date() });
-    await order.save();
-    
-    console.log('✅ Payment captured via webhook:', order.orderId);
+async function handleWebhookPaymentSuccess(order, payment, correlationId = null, messageId = null) {
+  logger.logDomainHandlerEntry('payment', 'handleWebhookPaymentSuccess', ['order', 'payment'], correlationId, messageId);
+  
+  try {
+    if (order.paymentStatus !== 'paid') {
+      order.paymentStatus = 'paid';
+      order.razorpayPaymentId = payment.id;
+      order.status = 'confirmed';
+      order.trackingUpdates.push({ status: 'confirmed', message: 'Payment received via webhook', timestamp: new Date() });
+      await order.save();
+      
     
     // Emit event for real-time updates
     const dataEvents = require('../eventEmitter');
@@ -143,15 +170,24 @@ async function handleWebhookPaymentSuccess(order, payment) {
       console.error('Google Sheets sync error:', err)
     );
   }
+  
+  logger.logDomainHandlerExit('payment', 'handleWebhookPaymentSuccess', true, 'webhook_payment_processed', correlationId, messageId);
+  } catch (error) {
+    logger.logDomainHandlerExit('payment', 'handleWebhookPaymentSuccess', false, null, correlationId, messageId);
+    throw error;
+  }
 }
 
-async function handleCallbackPaymentSuccess(order, razorpay_payment_id) {
-  order.paymentStatus = 'paid';
-  order.paymentId = razorpay_payment_id;
-  order.razorpayPaymentId = razorpay_payment_id; // Store for refunds
-  order.status = 'confirmed';
-  order.trackingUpdates.push({ status: 'confirmed', message: 'Payment received, order confirmed' });
-  await order.save();
+async function handleCallbackPaymentSuccess(order, razorpay_payment_id, correlationId = null, messageId = null) {
+  logger.logDomainHandlerEntry('payment', 'handleCallbackPaymentSuccess', ['order', 'razorpay_payment_id'], correlationId, messageId);
+  
+  try {
+    order.paymentStatus = 'paid';
+    order.paymentId = razorpay_payment_id;
+    order.razorpayPaymentId = razorpay_payment_id; // Store for refunds
+    order.status = 'confirmed';
+    order.trackingUpdates.push({ status: 'confirmed', message: 'Payment received, order confirmed' });
+    await order.save();
 
   // Emit event for real-time updates
   const dataEvents = require('../eventEmitter');
@@ -217,24 +253,31 @@ async function handleCallbackPaymentSuccess(order, razorpay_payment_id) {
     await customer.save();
   }
   
-  console.log(`✅ Payment confirmed for order ${order.orderId}`);
+  
+  logger.logDomainHandlerExit('payment', 'handleCallbackPaymentSuccess', true, 'callback_payment_successful', correlationId, messageId);
+  } catch (error) {
+    logger.logDomainHandlerExit('payment', 'handleCallbackPaymentSuccess', false, null, correlationId, messageId);
+    throw error;
+  }
 }
 
-async function handleRefundSuccess(order, refund) {
-  order.refundStatus = 'completed';
-  order.refundId = refund.id;
-  order.refundProcessedAt = new Date();
-  order.paymentStatus = 'refunded';
-  order.status = 'refunded';
-  order.statusUpdatedAt = new Date();
-  order.trackingUpdates.push({ 
-    status: 'refunded', 
-    message: `Refund of ₹${refund.amount / 100} processed. Refund ID: ${refund.id}`, 
-    timestamp: new Date() 
-  });
-  await order.save();
+async function handleRefundSuccess(order, refund, correlationId = null, messageId = null) {
+  logger.logDomainHandlerEntry('payment', 'handleRefundSuccess', ['order', 'refund'], correlationId, messageId);
   
-  console.log('✅ Order updated with refund:', order.orderId);
+  try {
+    order.refundStatus = 'completed';
+    order.refundId = refund.id;
+    order.refundProcessedAt = new Date();
+    order.paymentStatus = 'refunded';
+    order.status = 'refunded';
+    order.statusUpdatedAt = new Date();
+    order.trackingUpdates.push({ 
+      status: 'refunded', 
+      message: `Refund of ₹${refund.amount / 100} processed. Refund ID: ${refund.id}`, 
+      timestamp: new Date() 
+    });
+    await order.save();
+    
   
   // Emit event for real-time updates
   const dataEvents = require('../eventEmitter');
@@ -258,20 +301,29 @@ async function handleRefundSuccess(order, refund) {
   } catch (whatsappErr) {
     console.error('WhatsApp notification failed:', whatsappErr.message);
   }
+  
+  logger.logDomainHandlerExit('payment', 'handleRefundSuccess', true, 'refund_successful', correlationId, messageId);
+  } catch (error) {
+    logger.logDomainHandlerExit('payment', 'handleRefundSuccess', false, null, correlationId, messageId);
+    throw error;
+  }
 }
 
-async function handleRefundFailure(order, refund) {
-  order.refundStatus = 'failed';
-  order.refundError = refund.failure_reason || 'Refund failed';
-  order.paymentStatus = 'refund_failed';
-  order.status = 'cancelled';
-  order.statusUpdatedAt = new Date();
-  order.trackingUpdates.push({ 
-    status: 'refund_failed', 
-    message: `Refund failed: ${refund.failure_reason || 'Unknown error'}`, 
-    timestamp: new Date() 
-  });
-  await order.save();
+async function handleRefundFailure(order, refund, correlationId = null, messageId = null) {
+  logger.logDomainHandlerEntry('payment', 'handleRefundFailure', ['order', 'refund'], correlationId, messageId);
+  
+  try {
+    order.refundStatus = 'failed';
+    order.refundError = refund.failure_reason || 'Refund failed';
+    order.paymentStatus = 'refund_failed';
+    order.status = 'cancelled';
+    order.statusUpdatedAt = new Date();
+    order.trackingUpdates.push({ 
+      status: 'refund_failed', 
+      message: `Refund failed: ${refund.failure_reason || 'Unknown error'}`, 
+      timestamp: new Date() 
+    });
+    await order.save();
   
   // Emit event for real-time updates
   const dataEvents = require('../eventEmitter');
@@ -294,6 +346,12 @@ async function handleRefundFailure(order, refund) {
     );
   } catch (whatsappErr) {
     console.error('WhatsApp notification failed:', whatsappErr.message);
+  }
+  
+  logger.logDomainHandlerExit('payment', 'handleRefundFailure', true, 'refund_failure_handled', correlationId, messageId);
+  } catch (error) {
+    logger.logDomainHandlerExit('payment', 'handleRefundFailure', false, null, correlationId, messageId);
+    throw error;
   }
 }
 

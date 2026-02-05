@@ -3219,7 +3219,7 @@ const chatbot = {
   },
 
   // ============ ORDERING ============
-  async handleMessage(phone, message, messageType = 'text', selectedId = null, senderName = null) {
+  async handleMessage(phone, message, messageType = 'text', selectedId = null, senderName = null, correlationId = null) {
     // Check if holiday mode is enabled
     const holidayMode = await Settings.getValue('holidayMode', false);
     if (holidayMode) {
@@ -3328,7 +3328,7 @@ const chatbot = {
     try {
       // ========== HANDLE LOCATION MESSAGE ==========
       if (messageType === 'location') {
-        const locationResult = await locationHandler.handleLocationMessage(phone, message, customer, state);
+        const locationResult = await locationHandler.handleLocationMessage(phone, message, customer, state, correlationId);
         if (locationResult.shouldReturn) {
           return;
         }
@@ -3373,7 +3373,7 @@ const chatbot = {
         
         if (addedCount > 0) {
           // Show cart summary and proceed to checkout
-          await cartHandler.handleViewCart({ phone, customer });
+          await cartHandler.handleViewCart({ phone, customer, correlationId });
         } else {
           // No items were added
           await whatsapp.sendButtons(phone, 
@@ -3468,19 +3468,19 @@ const chatbot = {
       // ========== CART COMMANDS (check CLEAR first, then VIEW - order matters!) ==========
       // Clear cart must be checked BEFORE view cart because "clear my cart" contains "my cart"
       else if (selection === 'clear_cart' || (!selectedId && this.isClearCartIntent(msg))) {
-        await cartHandler.handleClearCart({ phone, customer });
+        await cartHandler.handleClearCart({ phone, customer, correlationId });
       }
       else if (selection === 'view_cart') {
-        await cartHandler.handleViewCart({ phone, customer });
+        await cartHandler.handleViewCart({ phone, customer, correlationId });
       }
       // Handle simple cart keyword (just "cart") - show cart options menu
       else if (!selectedId && this.isSimpleCartKeyword(msg)) {
-        await cartHandler.handleCartOptionsMenu({ phone });
+        await cartHandler.handleCartOptionsMenu({ phone, correlationId });
         await conversationState.setState(null, { currentStep: 'cart_options' }, { phone });
       }
       // Handle full cart intent ("view cart", "my cart", etc.) - show cart directly
       else if (!selectedId && this.isCartIntent(msg)) {
-        await cartHandler.handleViewCart({ phone, customer });
+        await cartHandler.handleViewCart({ phone, customer, correlationId });
       }
       else if (selection === 'view_menu' || msg === 'menu') {
         await menuHandler.handleFoodTypeSelection(phone);
@@ -3492,23 +3492,23 @@ const chatbot = {
         console.log('🍽️ Menu intent detected:', menuIntent);
         
         if (menuIntent.foodType === 'veg') {
-          await menuHandler.handleShowMenuCategories(phone, menuItems, 'veg', '🌿 Veg Menu');
+          await menuHandler.handleShowMenuCategories(phone, menuItems, 'veg', '🌿 Veg Menu', correlationId);
         } else if (menuIntent.foodType === 'egg') {
-          await menuHandler.handleShowMenuCategories(phone, menuItems, 'egg', '🥚 Egg Menu');
+          await menuHandler.handleShowMenuCategories(phone, menuItems, 'egg', '🥚 Egg Menu', correlationId);
         } else if (menuIntent.foodType === 'nonveg') {
-          await menuHandler.handleShowMenuCategories(phone, menuItems, 'nonveg', '🍗 Non-Veg Menu');
+          await menuHandler.handleShowMenuCategories(phone, menuItems, 'nonveg', '🍗 Non-Veg Menu', correlationId);
         } else {
           // Show food type selection (Browse Menu screen with Veg/Non-Veg/All options)
-          await menuHandler.handleFoodTypeSelection(phone);
+          await menuHandler.handleFoodTypeSelection(phone, correlationId);
           await conversationState.setState(null, { currentStep: 'select_food_type' }, { phone });
         }
       }
       else if (selection === 'food_veg' || selection === 'food_nonveg' || selection === 'food_both') {
-        await menuHandler.handleFoodTypeSelectionResponse(phone, menuItems, selection);
+        await menuHandler.handleFoodTypeSelectionResponse(phone, menuItems, selection, correlationId);
       }
       else if (selection === 'place_order' || selection === 'order_now' || (!selectedId && msg === 'order')) {
         // Handle place order intent through orderHandler
-        await orderHandler.handlePlaceOrderIntent(phone, menuItems);
+        await orderHandler.handlePlaceOrderIntent(phone, menuItems, correlationId);
       }
       // Check cancel/refund/track BEFORE order status (they're more specific)
       // Only check text-based intents when there's no selectedId (button click)
@@ -3538,7 +3538,7 @@ const chatbot = {
       }
       // ========== ORDER FOOD BUTTON (from welcome message) ==========
       else if (selection === 'order_food') {
-        await menuHandler.handleFoodTypeSelection(phone);
+        await menuHandler.handleFoodTypeSelection(phone, correlationId);
         await conversationState.setState(null, { currentStep: 'select_food_type_order' }, { phone });
       }
       // ========== MY ORDERS BUTTON (from welcome message) ==========
@@ -3561,7 +3561,7 @@ const chatbot = {
         if (matchingItems.length === 1) {
           // Exact match - add to cart with qty 1
           const item = matchingItems[0];
-          await cartHandler.handleAddToCart({ phone, customer, item, quantity: 1 });
+          await cartHandler.handleAddToCart({ phone, customer, item, quantity: 1, correlationId });
           await conversationState.setState(null, { currentStep: 'item_added' }, { phone });
         } else if (matchingItems.length > 1) {
           // Multiple matches - show options
@@ -3591,7 +3591,7 @@ const chatbot = {
         if (currentState.selectedItem && currentState.currentStep === 'viewing_item_details') {
           const item = menuItems.find(m => m._id.toString() === currentState.selectedItem);
           if (item) {
-            await cartHandler.handleAddToCart({ phone, customer, item, quantity: 1 });
+            await cartHandler.handleAddToCart({ phone, customer, item, quantity: 1, correlationId });
             console.log(`✅ Added ${item.name} to cart before checkout`);
           }
         }
@@ -3606,7 +3606,7 @@ const chatbot = {
           await conversationState.setState(null, { currentStep: 'main_menu' }, { phone });
         } else {
           // Check if cart items are still available
-          const availabilityCheck = await cartHandler.checkCartAvailability(customer.cart);
+          const availabilityCheck = await cartHandler.checkCartAvailability(customer.cart, correlationId);
           
           if (!availabilityCheck.available) {
             // Some items are unavailable - notify user
@@ -3623,7 +3623,7 @@ const chatbot = {
             await conversationState.setState(null, { currentStep: 'viewing_cart' }, { phone });
           } else {
             // All items available - ask for service type (Delivery or Self-Pickup)
-            await locationHandler.handleServiceTypeSelection(phone);
+            await locationHandler.handleServiceTypeSelection(phone, correlationId);
             await conversationState.setState(null, { currentStep: 'select_service_type' }, { phone });
           }
         }
@@ -3631,7 +3631,7 @@ const chatbot = {
       else if (selection === 'service_delivery') {
         // Customer chose delivery service - proceed to location
         await conversationState.setState(null, { serviceType: 'delivery' }, { phone });
-        await locationHandler.handleAddressCapture(phone);
+        await locationHandler.handleAddressCapture(phone, correlationId);
         await conversationState.setState(null, { currentStep: 'awaiting_location' }, { phone });
       }
       else if (selection === 'service_pickup') {
@@ -3642,7 +3642,7 @@ const chatbot = {
           updatedAt: new Date()
         };
         await customer.save();
-        await paymentInitiationHandler.handleSelectPickupPaymentMethod(phone, customer);
+        await paymentInitiationHandler.handleSelectPickupPaymentMethod(phone, customer, correlationId);
         await conversationState.setState(null, { currentStep: 'select_pickup_payment_method' }, { phone });
       }
       else if (selection === 'share_location') {
@@ -3663,7 +3663,7 @@ const chatbot = {
           updatedAt: new Date()
         };
         await customer.save();
-        await orderHandler.handleOrderSummary(phone, customer);
+        await orderHandler.handleOrderSummary(phone, customer, correlationId);
         await conversationState.setState(null, { currentStep: 'select_payment_method' }, { phone });
       }
       else if (selection === 'pay_upi') {
@@ -3674,7 +3674,7 @@ const chatbot = {
           await conversationState.setState(null, { currentStep: 'main_menu' }, { phone });
         } else {
           // Check if cart items are still available before payment
-          const availabilityCheck = await checkCartAvailability(customer.cart);
+          const availabilityCheck = await checkCartAvailability(customer.cart, correlationId);
           
           if (!availabilityCheck.available) {
             const unavailableNames = availabilityCheck.unavailableItems.map(i => i.name).join(', ');
@@ -3690,11 +3690,11 @@ const chatbot = {
             await conversationState.setState(null, { currentStep: 'viewing_cart' }, { phone });
           } else {
             await conversationState.setState(null, { paymentMethod: 'upi' }, { phone });
-            const result = await orderHandler.handleOrderConfirmation(phone, customer, state);
+            const result = await orderHandler.handleOrderConfirmation(phone, customer, state, correlationId);
             if (result.success) {
               // Continue with payment logic using the returned order data
               // Payment processing remains in chatbot.js
-              await paymentInitiationHandler.handleInitiateOnlinePayment(phone, customer, state, result);
+              await paymentInitiationHandler.handleInitiateOnlinePayment(phone, customer, state, result, correlationId);
               if (result.success) await conversationState.setState(null, { currentStep: 'awaiting_payment' }, { phone });
             }
           }
@@ -3708,7 +3708,7 @@ const chatbot = {
           await conversationState.setState(null, { currentStep: 'main_menu' }, { phone });
         } else {
           // Check if cart items are still available before COD order
-          const availabilityCheck = await checkCartAvailability(customer.cart);
+          const availabilityCheck = await checkCartAvailability(customer.cart, correlationId);
           
           if (!availabilityCheck.available) {
             const unavailableNames = availabilityCheck.unavailableItems.map(i => i.name).join(', ');
@@ -3724,7 +3724,7 @@ const chatbot = {
             await conversationState.setState(null, { currentStep: 'viewing_cart' }, { phone });
           } else {
             await conversationState.setState(null, { paymentMethod: 'cod' }, { phone });
-            const result = await paymentInitiationHandler.handleInitiateCOD(phone, customer, state);
+            const result = await paymentInitiationHandler.handleInitiateCOD(phone, customer, state, correlationId);
             if (result.success) await conversationState.setState(null, { currentStep: 'order_confirmed' }, { phone });
           }
         }
@@ -3751,7 +3751,7 @@ const chatbot = {
           await conversationState.setState(null, { currentStep: 'main_menu' }, { phone });
         } else {
           // Check if cart items are still available before payment
-          const availabilityCheck = await checkCartAvailability(customer.cart);
+          const availabilityCheck = await checkCartAvailability(customer.cart, correlationId);
           
           if (!availabilityCheck.available) {
             const unavailableNames = availabilityCheck.unavailableItems.map(i => i.name).join(', ');
@@ -3767,11 +3767,11 @@ const chatbot = {
             await conversationState.setState(null, { currentStep: 'viewing_cart' }, { phone });
           } else {
             await conversationState.setState(null, { paymentMethod: 'upi', serviceType: 'pickup' }, { phone });
-            const result = await orderHandler.handleOrderConfirmation(phone, customer, state);
+            const result = await orderHandler.handleOrderConfirmation(phone, customer, state, correlationId);
             if (result.success) {
               // Continue with payment logic using the returned order data
               // Payment processing remains in chatbot.js
-              await paymentInitiationHandler.handleInitiateOnlinePayment(phone, customer, state, result);
+              await paymentInitiationHandler.handleInitiateOnlinePayment(phone, customer, state, result, correlationId);
               if (result.success) await conversationState.setState(null, { currentStep: 'awaiting_payment' }, { phone });
             }
           }
@@ -3784,11 +3784,11 @@ const chatbot = {
           ]);
           await conversationState.setState(null, { currentStep: 'main_menu' }, { phone });
         } else {
-          const result = await orderHandler.handleOrderConfirmation(phone, customer, state);
+          const result = await orderHandler.handleOrderConfirmation(phone, customer, state, correlationId);
           if (result.success) {
             // Continue with payment logic using the returned order data
             // Payment processing remains in chatbot.js
-            await paymentInitiationHandler.handleInitiateOnlinePayment(phone, customer, state, result);
+            await paymentInitiationHandler.handleInitiateOnlinePayment(phone, customer, state, result, correlationId);
             if (result.success) await conversationState.setState(null, { currentStep: 'awaiting_payment' }, { phone });
           }
         }
