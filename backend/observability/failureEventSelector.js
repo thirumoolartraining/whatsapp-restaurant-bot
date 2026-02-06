@@ -80,7 +80,11 @@ const DEADLETTER_EVENT_NAMES = new Set([
  * @returns {boolean} True if the event represents a failure
  */
 function isFailureEvent(timelineStep) {
-  if (!timelineStep || !timelineStep.eventName) {
+  if (!timelineStep) {
+    return false;
+  }
+
+  if (!timelineStep.eventName) {
     return false;
   }
 
@@ -98,9 +102,11 @@ function isFailureEvent(timelineStep) {
   // Check event level for explicit error (only if outcome is not set)
   if (timelineStep.level === 'error' && 
       !timelineStep.outcome && 
-      !timelineStep.eventName.includes('success') &&
-      !timelineStep.eventName.includes('complete')) {
-    return true;
+      timelineStep.eventName) {
+    const name = typeof timelineStep?.eventName === 'string' ? timelineStep.eventName : '';
+    if (!name.includes('success') && !name.includes('complete')) {
+      return true;
+    }
   }
 
   return false;
@@ -119,6 +125,10 @@ function isTerminalFailure(timelineStep) {
     return false;
   }
 
+  if (!timelineStep.eventName) {
+    return false;
+  }
+
   // Explicit terminal failure event names
   if (DEADLETTER_EVENT_NAMES.has(timelineStep.eventName)) {
     return true;
@@ -132,8 +142,9 @@ function isTerminalFailure(timelineStep) {
     'processing_failed'
   ];
 
+  const name = typeof timelineStep?.eventName === 'string' ? timelineStep.eventName : '';
   return terminalPatterns.some(pattern => 
-    timelineStep.eventName.includes(pattern)
+    name.includes(pattern)
   );
 }
 
@@ -144,7 +155,11 @@ function isTerminalFailure(timelineStep) {
  * @returns {boolean} True if the event represents a retry attempt
  */
 function isRetryEvent(timelineStep) {
-  if (!timelineStep || !timelineStep.eventName) {
+  if (!timelineStep) {
+    return false;
+  }
+
+  if (!timelineStep.eventName) {
     return false;
   }
 
@@ -158,7 +173,11 @@ function isRetryEvent(timelineStep) {
  * @returns {boolean} True if the event represents deadletter emission
  */
 function isDeadletterEvent(timelineStep) {
-  if (!timelineStep || !timelineStep.eventName) {
+  if (!timelineStep) {
+    return false;
+  }
+
+  if (!timelineStep.eventName) {
     return false;
   }
 
@@ -172,7 +191,11 @@ function isDeadletterEvent(timelineStep) {
  * @returns {boolean} True if the event represents provider rejection
  */
 function isProviderRejection(timelineStep) {
-  if (!timelineStep || !timelineStep.eventName) {
+  if (!timelineStep) {
+    return false;
+  }
+
+  if (!timelineStep.eventName) {
     return false;
   }
 
@@ -184,8 +207,9 @@ function isProviderRejection(timelineStep) {
     'webhook_rejected'
   ];
 
+  const name = typeof timelineStep?.eventName === 'string' ? timelineStep.eventName : '';
   return providerRejectionPatterns.some(pattern => 
-    timelineStep.eventName.includes(pattern)
+    name.includes(pattern)
   );
 }
 
@@ -196,7 +220,11 @@ function isProviderRejection(timelineStep) {
  * @returns {boolean} True if the event represents validation failure
  */
 function isValidationFailure(timelineStep) {
-  if (!timelineStep || !timelineStep.eventName) {
+  if (!timelineStep) {
+    return false;
+  }
+
+  if (!timelineStep.eventName) {
     return false;
   }
 
@@ -209,8 +237,9 @@ function isValidationFailure(timelineStep) {
     'malformed_request'
   ];
 
+  const name = typeof timelineStep?.eventName === 'string' ? timelineStep.eventName : '';
   return validationFailurePatterns.some(pattern => 
-    timelineStep.eventName.includes(pattern)
+    name.includes(pattern)
   );
 }
 
@@ -267,7 +296,7 @@ function selectRetryEvents(timelineSteps) {
 function getLastTerminalFailure(timelineSteps) {
   const terminalFailures = selectTerminalFailures(timelineSteps);
   
-  if (terminalFailures.length === 0) {
+  if (!Array.isArray(terminalFailures) || terminalFailures.length === 0) {
     return null;
   }
 

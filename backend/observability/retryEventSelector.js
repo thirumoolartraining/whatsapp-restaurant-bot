@@ -40,12 +40,8 @@ function selectRetryEvents(canonicalEvents) {
     return event.eventName && RETRY_EVENT_NAMES.has(event.eventName);
   });
 
-  // Sort by timestamp to maintain chronological order
-  return retryEvents.sort((a, b) => {
-    const timeA = new Date(a.timestamp).getTime();
-    const timeB = new Date(b.timestamp).getTime();
-    return timeA - timeB;
-  });
+  // Events are already sorted by timeline builder - no additional sorting needed
+  return retryEvents;
 }
 
 /**
@@ -157,6 +153,7 @@ function getTerminalRetryEvent(canonicalEvents) {
     const events = retryEvents.filter(event => event.eventName === eventName);
     if (events.length > 0) {
       // Return the last occurrence
+      if (!Array.isArray(events) || events.length === 0) return null;
       return events[events.length - 1];
     }
   }

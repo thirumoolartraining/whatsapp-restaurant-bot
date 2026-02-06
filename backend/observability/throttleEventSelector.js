@@ -38,12 +38,8 @@ function selectThrottleEvents(canonicalEvents) {
     return event.eventName && THROTTLE_EVENT_NAMES.has(event.eventName);
   });
 
-  // Sort by timestamp to maintain chronological order
-  return throttleEvents.sort((a, b) => {
-    const timeA = new Date(a.timestamp).getTime();
-    const timeB = new Date(b.timestamp).getTime();
-    return timeA - timeB;
-  });
+  // Events are already sorted by timeline builder - no additional sorting needed
+  return throttleEvents;
 }
 
 /**
@@ -62,6 +58,7 @@ function selectLastThrottleDecision(canonicalEvents) {
     const events = throttleEvents.filter(event => event.eventName === eventName);
     if (events.length > 0) {
       // Return the last occurrence
+      if (!Array.isArray(events) || events.length === 0) return null;
       return events[events.length - 1];
     }
   }
@@ -69,6 +66,7 @@ function selectLastThrottleDecision(canonicalEvents) {
   // If no explicit decision event, look for evaluation
   const evaluationEvents = throttleEvents.filter(event => event.eventName === 'throttle_evaluated');
   if (evaluationEvents.length > 0) {
+    if (!Array.isArray(evaluationEvents) || evaluationEvents.length === 0) return null;
     return evaluationEvents[evaluationEvents.length - 1];
   }
 

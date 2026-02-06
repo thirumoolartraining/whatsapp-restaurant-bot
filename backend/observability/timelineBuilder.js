@@ -71,6 +71,10 @@ const EVENT_PHASE_MAPPING = {
  * Maps event levels and payload taxonomy to outcomes.
  */
 function deriveOutcome(event) {
+  if (!event) {
+    return OUTCOMES.SUCCESS;
+  }
+
   const { level, payload } = event;
   
   // Check payload for explicit outcome indicators
@@ -88,7 +92,7 @@ function deriveOutcome(event) {
       return OUTCOMES.FAILED;
     case 'warn':
       // Warning could be throttled or failed, check event name
-      if (event.eventName.includes('throttle') || event.eventName.includes('rate_limit')) {
+      if (event.eventName && (event.eventName.includes('throttle') || event.eventName.includes('rate_limit'))) {
         return OUTCOMES.THROTTLED;
       }
       return OUTCOMES.FAILED;
@@ -125,6 +129,9 @@ function extractReason(event) {
  * Map event name to phase using explicit mapping table
  */
 function mapEventToPhase(eventName) {
+  if (!eventName) {
+    return PHASES.UNKNOWN;
+  }
   return EVENT_PHASE_MAPPING[eventName] || PHASES.UNKNOWN;
 }
 
@@ -184,6 +191,84 @@ function detectGaps(steps) {
 }
 
 /**
+ * Canonical Event Comparator
+ * 
+ * Implements deterministic sorting with strict precedence:
+ * 1. timestamp (ascending)
+ * 2. sequence or emissionIndex (if present, ascending)
+ * 3. component (lexicographic, ascending)
+ * 4. eventName (lexicographic, ascending)
+ * 5. eventId or stable hash (last resort, ascending)
+ * 
+ * Comparator returns 0 only if all keys are equal.
+ * No randomness, no locale-dependent compares, no insertion order reliance.
+ */
+function canonicalEventComparator(a, b) {
+  // Safety: ensure inputs exist
+  if (!a && !b) return 0;
+  if (!a) return -1;
+  if (!b) return 1;
+  
+  // 1. Primary sort: timestamp (ascending)
+  const timeA = new Date(a.timestamp).getTime();
+  const timeB = new Date(b.timestamp).getTime();
+  
+  // Safety: handle invalid timestamps
+  const validTimeA = isNaN(timeA) ? 0 : timeA;
+  const validTimeB = isNaN(timeB) ? 0 : timeB;
+  
+  if (validTimeA !== validTimeB) {
+    const result = validTimeA - validTimeB;
+    // Safety assertion: ensure result is not NaN
+    if (isNaN(result)) return validTimeA < validTimeB ? -1 : 1;
+    return result;
+  }
+  
+  // 2. Secondary sort: sequence or emissionIndex (if present, ascending)
+  const seqA = a.sequence !== undefined ? a.sequence : (a.emissionIndex !== undefined ? a.emissionIndex : undefined);
+  const seqB = b.sequence !== undefined ? b.sequence : (b.emissionIndex !== undefined ? b.emissionIndex : undefined);
+  
+  if (seqA !== undefined && seqB !== undefined && seqA !== seqB) {
+    const result = seqA - seqB;
+    // Safety assertion: ensure result is not NaN
+    if (isNaN(result)) return seqA < seqB ? -1 : 1;
+    return result;
+  }
+  if (seqA !== undefined && seqB === undefined) return -1;
+  if (seqA === undefined && seqB !== undefined) return 1;
+  
+  // 3. Tertiary sort: component (lexicographic, ascending)
+  const compA = a.component || '';
+  const compB = b.component || '';
+  
+  if (compA !== compB) {
+    // Simple string compare (no localeCompare for determinism)
+    return compA < compB ? -1 : 1;
+  }
+  
+  // 4. Quaternary sort: eventName (lexicographic, ascending)
+  const nameA = a.eventName || '';
+  const nameB = b.eventName || '';
+  
+  if (nameA !== nameB) {
+    // Simple string compare (no localeCompare for determinism)
+    return nameA < nameB ? -1 : 1;
+  }
+  
+  // 5. Final sort: eventId or stable hash (last resort, ascending)
+  const idA = a.eventId || '';
+  const idB = b.eventId || '';
+  
+  if (idA !== idB) {
+    // Simple string compare (no localeCompare for determinism)
+    return idA < idB ? -1 : 1;
+  }
+  
+  // All keys equal - events are identical for sorting purposes
+  return 0;
+}
+
+/**
  * Timeline Builder Function (CORE)
  * 
  * Builds a deterministic timeline from canonical events for a given correlation ID.
@@ -211,24 +296,8 @@ function buildTimeline(correlationId, options = {}) {
     throw new Error('Either options.events or options.eventFetcher must be provided');
   }
   
-  // Sort events deterministically
-  const sortedEvents = events.slice().sort((a, b) => {
-    // Primary sort: timestamp
-    const timeA = new Date(a.timestamp).getTime();
-    const timeB = new Date(b.timestamp).getTime();
-    
-    if (timeA !== timeB) {
-      return timeA - timeB;
-    }
-    
-    // Secondary sort: stable fallback by event name then component
-    const nameCompare = (a.eventName || '').localeCompare(b.eventName || '');
-    if (nameCompare !== 0) {
-      return nameCompare;
-    }
-    
-    return (a.component || '').localeCompare(b.component || '');
-  });
+  // Sort events deterministically with canonical precedence
+  const sortedEvents = events.slice().sort(canonicalEventComparator);
   
   // Convert each event to TimelineStep
   const steps = sortedEvents.map((event, index) => {
@@ -238,17 +307,17 @@ function buildTimeline(correlationId, options = {}) {
     
     return new TimelineStep({
       index,
-      timestamp: event.timestamp,
-      eventName: event.eventName,
-      component: event.component,
+      timestamp: event.timestamp || null,
+      eventName: event.eventName || 'unknown',
+      component: event.component || 'unknown',
       phase,
       outcome,
       reason,
       entityRefs: event.entityRefs,
       rawEventRef: {
-        eventName: event.eventName,
-        component: event.component,
-        timestamp: event.timestamp
+        eventName: event.eventName || 'unknown',
+        component: event.component || 'unknown',
+        timestamp: event.timestamp || null
       }
     });
   });
@@ -280,6 +349,9 @@ function buildTimeline(correlationId, options = {}) {
 module.exports = {
   // Core function
   buildTimeline,
+  
+  // Canonical comparator (exported for testing)
+  canonicalEventComparator,
   
   // Mapping and utilities (exported for testing)
   EVENT_PHASE_MAPPING,

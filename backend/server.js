@@ -6,6 +6,7 @@ const path = require('path');
 const dataEvents = require('./services/eventEmitter');
 const corsConfig = require('./config/corsConfig');
 const { authLimiter, adminLimiter, webhookLimiter } = require('./middleware/rateLimit');
+const authMiddleware = require('./middleware/auth');
 const Logger = require('./services/logger');
 
 const logger = new Logger('server');
@@ -107,7 +108,7 @@ app.use('/api/hero-sections', adminLimiter, heroSectionRoutes);
 app.use('/api/offers', adminLimiter, offersRoutes);
 app.use('/api/whatsapp-broadcast', adminLimiter, whatsappBroadcastRoutes);
 app.use('/api/settings', adminLimiter, settingsRoutes);
-app.use('/api/observability', observabilityRoutes);
+app.use('/api/observability', adminLimiter, authMiddleware, observabilityRoutes);
 
 // Global error handler
 app.use(errorHandler);

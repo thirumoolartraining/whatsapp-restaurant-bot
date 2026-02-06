@@ -41,32 +41,33 @@ function extractErrorCategory(timelineStep) {
 
   // Derive from event name patterns (explicit mapping only)
   const eventName = timelineStep.eventName;
+  const safeEventName = typeof eventName === 'string' ? eventName : '';
   
-  if (eventName.includes('validation') || eventName.includes('invalid') || eventName.includes('malformed')) {
+  if (safeEventName.includes('validation') || safeEventName.includes('invalid') || safeEventName.includes('malformed')) {
     return 'validation';
   }
   
-  if (eventName.includes('provider') || eventName.includes('api') || eventName.includes('webhook')) {
+  if (safeEventName.includes('provider') || safeEventName.includes('api') || safeEventName.includes('webhook')) {
     return 'provider';
   }
   
-  if (eventName.includes('authentication') || eventName.includes('authorization')) {
+  if (safeEventName.includes('authentication') || safeEventName.includes('authorization')) {
     return 'authentication';
   }
   
-  if (eventName.includes('rate_limit') || eventName.includes('throttle')) {
+  if (safeEventName.includes('rate_limit') || safeEventName.includes('throttle')) {
     return 'rate_limit';
   }
   
-  if (eventName.includes('timeout')) {
+  if (safeEventName.includes('timeout')) {
     return 'timeout';
   }
   
-  if (eventName.includes('retry') || eventName.includes('exhausted')) {
+  if (safeEventName.includes('retry') || safeEventName.includes('exhausted')) {
     return 'retry';
   }
   
-  if (eventName.includes('deadletter')) {
+  if (safeEventName.includes('deadletter')) {
     return 'deadletter';
   }
   
@@ -269,7 +270,7 @@ function handleMultipleFailures(failureEvents, terminalFailures, retryEvents) {
     return {
       primaryFailure: lastTerminalFailure,
       hasTerminalFailure: true,
-      contextFailures: failureEvents.filter(event => event.index !== lastTerminalFailure.index)
+      contextFailures: failureEvents ? failureEvents.filter(event => event.index !== lastTerminalFailure.index) : []
     };
   }
 
@@ -338,12 +339,12 @@ function buildFailureNarrative(timeline) {
   // Extract taxonomy fields from primary failure
   const errorCategory = extractErrorCategory(primaryFailureEvent);
   const origin = extractOrigin(primaryFailureEvent);
-  const finality = determineFinality(failureEvents, retryEvents, terminalFailures[terminalFailures.length - 1]);
+  const finality = determineFinality(failureEvents, retryEvents, terminalFailures.length > 0 ? terminalFailures[terminalFailures.length - 1] : null);
   const where = primaryFailureEvent.component;
   const eventName = primaryFailureEvent.eventName;
   const why = extractWhy(primaryFailureEvent);
   const attempts = countRetryAttempts(retryEvents, failureEvents);
-  const terminalEventRef = createTerminalEventRef(failureAnalysis.hasTerminalFailure ? terminalFailures[terminalFailures.length - 1] : null);
+  const terminalEventRef = createTerminalEventRef(failureAnalysis.hasTerminalFailure && terminalFailures.length > 0 ? terminalFailures[terminalFailures.length - 1] : null);
 
   // Build and return failure narrative
   return new FailureNarrative({

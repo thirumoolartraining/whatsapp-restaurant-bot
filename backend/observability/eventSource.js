@@ -8,30 +8,51 @@
 
 const { normalizeRawEvent } = require('./eventEnvelope');
 
+// Configuration with environment variable fallbacks
+const EVENT_SOURCE_CONFIG = {
+  TTL_MS: process.env.EVENT_SOURCE_TTL_HOURS 
+    ? parseInt(process.env.EVENT_SOURCE_TTL_HOURS) * 60 * 60 * 1000 
+    : 24 * 60 * 60 * 1000, // 24 hours default
+  MAX_CORRELATION_BUCKETS: process.env.EVENT_SOURCE_MAX_BUCKETS 
+    ? parseInt(process.env.EVENT_SOURCE_MAX_BUCKETS) 
+    : 10000,
+  MAX_EVENTS_PER_BUCKET: process.env.EVENT_SOURCE_MAX_EVENTS_PER_BUCKET 
+    ? parseInt(process.env.EVENT_SOURCE_MAX_EVENTS_PER_BUCKET) 
+    : 1000,
+  CLEANUP_INTERVAL_MS: process.env.EVENT_SOURCE_CLEANUP_INTERVAL_MINUTES 
+    ? parseInt(process.env.EVENT_SOURCE_CLEANUP_INTERVAL_MINUTES) * 60 * 1000 
+    : 60 * 60 * 1000 // 1 hour default
+};
+
 /**
  * In-memory event store for observability
  * 
- * This is a simple in-memory implementation for Phase 5.5.
- * In production, this would be replaced with proper event store queries.
+ * Bounded implementation with TTL, size caps, and normalization caching.
+ * Safe for production long-running processes.
  */
 class InMemoryEventSource {
   constructor() {
-    this.events = new Map(); // correlationId -> events[]
+    // correlationId -> bucket { rawEvents: [], normalizedEvents: [], lastUpdatedAt: number }
+    this.events = new Map();
     this.isInitialized = false;
+    this.cleanupTimer = null;
+    
+    // Performance tracking for cleanup
+    this.totalEvents = 0;
   }
 
   /**
-   * Initialize event source (placeholder implementation)
-   * In production, this would connect to real event storage
+   * Initialize event source with cleanup timer
    */
   async initialize() {
-    // Placeholder: In production, load events from persistent storage
-    // For Phase 5.5, we start with empty store
     this.isInitialized = true;
+    
+    // Start periodic cleanup timer
+    this._startCleanupTimer();
   }
 
   /**
-   * Query events by correlation ID
+   * Query events by correlation ID (with cached normalization)
    * 
    * @param {string} correlationId - Correlation identifier
    * @returns {Array} Array of canonical events
@@ -41,12 +62,20 @@ class InMemoryEventSource {
       return [];
     }
 
-    const events = this.events.get(correlationId) || [];
-    return events.map(event => normalizeRawEvent(event));
+    const bucket = this.events.get(correlationId);
+    if (!bucket) {
+      return [];
+    }
+
+    // Update last accessed time for LRU tracking
+    bucket.lastUpdatedAt = Date.now();
+    
+    // Return cached normalized events
+    return bucket.normalizedEvents || [];
   }
 
   /**
-   * Search events with filters
+   * Search events with filters (optimized for correlationId lookup)
    * 
    * @param {Object} filters - Search filters
    * @returns {Array} Array of matching correlation IDs with metadata
@@ -56,17 +85,33 @@ class InMemoryEventSource {
       return [];
     }
 
+    // Fast path: direct correlationId lookup
+    if (filters.correlationId && !filters.phone && !filters.orderId && !filters.from && !filters.to && !filters.outcome) {
+      const bucket = this.events.get(filters.correlationId);
+      if (bucket && bucket.rawEvents.length > 0) {
+        return [{
+          correlationId: filters.correlationId,
+          firstSeen: bucket.rawEvents[0]?.timestamp || null,
+          lastSeen: bucket.rawEvents[bucket.rawEvents.length - 1]?.timestamp || null,
+          outcome: this._deriveOutcome(bucket.normalizedEvents),
+          entityRefs: this._extractEntityRefs(bucket.normalizedEvents)
+        }];
+      }
+      return [];
+    }
+
+    // Full scan path
     const results = [];
     
-    for (const [correlationId, events] of this.events.entries()) {
-      const match = this._matchesFilters(events, filters);
+    for (const [correlationId, bucket] of this.events.entries()) {
+      const match = this._matchesFilters(bucket.normalizedEvents, filters);
       if (match) {
         results.push({
           correlationId,
-          firstSeen: events[0]?.timestamp || null,
-          lastSeen: events[events.length - 1]?.timestamp || null,
-          outcome: this._deriveOutcome(events),
-          entityRefs: this._extractEntityRefs(events)
+          firstSeen: bucket.rawEvents[0]?.timestamp || null,
+          lastSeen: bucket.rawEvents[bucket.rawEvents.length - 1]?.timestamp || null,
+          outcome: this._deriveOutcome(bucket.normalizedEvents),
+          entityRefs: this._extractEntityRefs(bucket.normalizedEvents)
         });
       }
     }
@@ -75,7 +120,7 @@ class InMemoryEventSource {
   }
 
   /**
-   * Add event to store (for testing/demo purposes)
+   * Add event to store with memory bounds and normalization caching
    * 
    * @param {Object} rawEvent - Raw event object
    */
@@ -84,17 +129,130 @@ class InMemoryEventSource {
       return;
     }
 
-    if (!this.events.has(rawEvent.correlationId)) {
-      this.events.set(rawEvent.correlationId, []);
+    const correlationId = rawEvent.correlationId;
+    const now = Date.now();
+
+    // Get or create bucket
+    let bucket = this.events.get(correlationId);
+    if (!bucket) {
+      bucket = {
+        rawEvents: [],
+        normalizedEvents: [],
+        lastUpdatedAt: now
+      };
+      this.events.set(correlationId, bucket);
     }
 
-    this.events.get(rawEvent.correlationId).push(rawEvent);
+    // Add raw event
+    bucket.rawEvents.push(rawEvent);
+    
+    // Normalize and cache
+    try {
+      const normalized = normalizeRawEvent(rawEvent);
+      bucket.normalizedEvents.push(normalized);
+    } catch (error) {
+      // Normalization should never throw due to fallback, but guard anyway
+      bucket.normalizedEvents.push(normalizeRawEvent({
+        ...rawEvent,
+        eventName: 'normalization_failed',
+        level: 'error',
+        payload: { originalEvent: rawEvent, error: error.message }
+      }));
+    }
+    
+    bucket.lastUpdatedAt = now;
+    this.totalEvents++;
+
+    // Enforce per-bucket size limit
+    if (bucket.rawEvents.length > EVENT_SOURCE_CONFIG.MAX_EVENTS_PER_BUCKET) {
+      const removeCount = bucket.rawEvents.length - EVENT_SOURCE_CONFIG.MAX_EVENTS_PER_BUCKET;
+      bucket.rawEvents.splice(0, removeCount);
+      bucket.normalizedEvents.splice(0, removeCount);
+      this.totalEvents -= removeCount;
+    }
+
+    // Enforce total bucket limit with lazy cleanup
+    if (this.events.size > EVENT_SOURCE_CONFIG.MAX_CORRELATION_BUCKETS) {
+      this._evictOldestBuckets();
+    }
+
+    // Lazy cleanup of expired buckets
+    this._cleanupExpiredBuckets();
+  }
+
+  /**
+   * Start periodic cleanup timer
+   */
+  _startCleanupTimer() {
+    if (this.cleanupTimer) {
+      clearInterval(this.cleanupTimer);
+    }
+    
+    this.cleanupTimer = setInterval(() => {
+      try {
+        this._cleanupExpiredBuckets();
+      } catch (error) {
+        // Silently fail - cleanup should never crash the process
+      }
+    }, EVENT_SOURCE_CONFIG.CLEANUP_INTERVAL_MS);
+  }
+
+  /**
+   * Cleanup expired buckets based on TTL
+   */
+  _cleanupExpiredBuckets() {
+    const now = Date.now();
+    const expiredKeys = [];
+    
+    for (const [correlationId, bucket] of this.events.entries()) {
+      if (now - bucket.lastUpdatedAt > EVENT_SOURCE_CONFIG.TTL_MS) {
+        expiredKeys.push(correlationId);
+      }
+    }
+    
+    for (const key of expiredKeys) {
+      const bucket = this.events.get(key);
+      if (bucket) {
+        this.totalEvents -= bucket.rawEvents.length;
+        this.events.delete(key);
+      }
+    }
+  }
+
+  /**
+   * Evict oldest buckets when over max limit
+   */
+  _evictOldestBuckets() {
+    const excess = this.events.size - EVENT_SOURCE_CONFIG.MAX_CORRELATION_BUCKETS;
+    if (excess <= 0) return;
+    
+    // Sort by lastUpdatedAt and remove oldest
+    const sorted = Array.from(this.events.entries())
+      .sort(([, a], [, b]) => a.lastUpdatedAt - b.lastUpdatedAt);
+    
+    for (let i = 0; i < excess && i < sorted.length; i++) {
+      const [correlationId, bucket] = sorted[i];
+      this.totalEvents -= bucket.rawEvents.length;
+      this.events.delete(correlationId);
+    }
+  }
+
+  /**
+   * Cleanup method for graceful shutdown
+   */
+  cleanup() {
+    if (this.cleanupTimer) {
+      clearInterval(this.cleanupTimer);
+      this.cleanupTimer = null;
+    }
+    this.events.clear();
+    this.totalEvents = 0;
   }
 
   /**
    * Check if events match search filters
    * 
-   * @param {Array} events - Events to check
+   * @param {Array} events - Normalized events to check
    * @param {Object} filters - Search filters
    * @returns {boolean} True if matches
    */

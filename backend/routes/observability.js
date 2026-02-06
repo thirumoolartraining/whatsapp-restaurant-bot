@@ -17,6 +17,27 @@ const { buildRetryView } = require('../observability/retryViewBuilder');
 // Event source
 const { getEventSource } = require('../observability/eventSource');
 
+// Validation helpers
+const { validateCorrelationId, validateSearchQuery } = require('../observability/validation');
+
+/**
+ * Helper function to send standardized error responses
+ */
+function sendError(res, httpStatus, code, message, details = null) {
+  const errorResponse = {
+    error: {
+      code,
+      message
+    }
+  };
+  
+  if (details) {
+    errorResponse.error.details = details;
+  }
+  
+  return res.status(httpStatus).json(errorResponse);
+}
+
 /**
  * Helper function to safely execute builders and handle errors
  */
@@ -54,13 +75,10 @@ function createResponse(success, data = null, error = null) {
 router.get('/timeline/:correlationId', async (req, res) => {
   const { correlationId } = req.params;
   
-  if (!correlationId) {
-    return res.status(400).json(
-      createResponse(false, null, { 
-        code: 'MISSING_CORRELATION_ID', 
-        message: 'Correlation ID is required' 
-      })
-    );
+  // Validate correlation ID
+  const validation = validateCorrelationId(correlationId);
+  if (!validation.ok) {
+    return sendError(res, 400, 'INVALID_CORRELATION_ID', validation.error);
   }
 
   try {
@@ -99,12 +117,7 @@ router.get('/timeline/:correlationId', async (req, res) => {
     }));
 
   } catch (error) {
-    res.status(500).json(
-      createResponse(false, null, { 
-        code: 'INTERNAL_ERROR', 
-        message: 'Internal server error' 
-      })
-    );
+    sendError(res, 500, 'INTERNAL_ERROR', 'Internal server error');
   }
 });
 
@@ -116,13 +129,10 @@ router.get('/timeline/:correlationId', async (req, res) => {
 router.get('/failure/:correlationId', async (req, res) => {
   const { correlationId } = req.params;
   
-  if (!correlationId) {
-    return res.status(400).json(
-      createResponse(false, null, { 
-        code: 'MISSING_CORRELATION_ID', 
-        message: 'Correlation ID is required' 
-      })
-    );
+  // Validate correlation ID
+  const validation = validateCorrelationId(correlationId);
+  if (!validation.ok) {
+    return sendError(res, 400, 'INVALID_CORRELATION_ID', validation.error);
   }
 
   try {
@@ -172,12 +182,7 @@ router.get('/failure/:correlationId', async (req, res) => {
     }));
 
   } catch (error) {
-    res.status(500).json(
-      createResponse(false, null, { 
-        code: 'INTERNAL_ERROR', 
-        message: 'Internal server error' 
-      })
-    );
+    sendError(res, 500, 'INTERNAL_ERROR', 'Internal server error');
   }
 });
 
@@ -189,13 +194,10 @@ router.get('/failure/:correlationId', async (req, res) => {
 router.get('/throttle/:correlationId', async (req, res) => {
   const { correlationId } = req.params;
   
-  if (!correlationId) {
-    return res.status(400).json(
-      createResponse(false, null, { 
-        code: 'MISSING_CORRELATION_ID', 
-        message: 'Correlation ID is required' 
-      })
-    );
+  // Validate correlation ID
+  const validation = validateCorrelationId(correlationId);
+  if (!validation.ok) {
+    return sendError(res, 400, 'INVALID_CORRELATION_ID', validation.error);
   }
 
   try {
@@ -225,12 +227,7 @@ router.get('/throttle/:correlationId', async (req, res) => {
     }));
 
   } catch (error) {
-    res.status(500).json(
-      createResponse(false, null, { 
-        code: 'INTERNAL_ERROR', 
-        message: 'Internal server error' 
-      })
-    );
+    sendError(res, 500, 'INTERNAL_ERROR', 'Internal server error');
   }
 });
 
@@ -242,13 +239,10 @@ router.get('/throttle/:correlationId', async (req, res) => {
 router.get('/retry/:correlationId', async (req, res) => {
   const { correlationId } = req.params;
   
-  if (!correlationId) {
-    return res.status(400).json(
-      createResponse(false, null, { 
-        code: 'MISSING_CORRELATION_ID', 
-        message: 'Correlation ID is required' 
-      })
-    );
+  // Validate correlation ID
+  const validation = validateCorrelationId(correlationId);
+  if (!validation.ok) {
+    return sendError(res, 400, 'INVALID_CORRELATION_ID', validation.error);
   }
 
   try {
@@ -278,12 +272,7 @@ router.get('/retry/:correlationId', async (req, res) => {
     }));
 
   } catch (error) {
-    res.status(500).json(
-      createResponse(false, null, { 
-        code: 'INTERNAL_ERROR', 
-        message: 'Internal server error' 
-      })
-    );
+    sendError(res, 500, 'INTERNAL_ERROR', 'Internal server error');
   }
 });
 
@@ -301,22 +290,14 @@ router.get('/retry/:correlationId', async (req, res) => {
  * - outcome: success|failed|retried|deadlettered|unknown
  */
 router.get('/search', async (req, res) => {
-  try {
-    const filters = {
-      correlationId: req.query.correlationId,
-      phone: req.query.phone,
-      orderId: req.query.orderId,
-      from: req.query.from,
-      to: req.query.to,
-      outcome: req.query.outcome
-    };
+  // Validate all query parameters
+  const validation = validateSearchQuery(req.query);
+  if (!validation.ok) {
+    return sendError(res, 400, 'INVALID_SEARCH_PARAMS', validation.error);
+  }
 
-    // Remove undefined filters
-    Object.keys(filters).forEach(key => {
-      if (filters[key] === undefined || filters[key] === '') {
-        delete filters[key];
-      }
-    });
+  try {
+    const filters = validation.value;
 
     const eventSource = getEventSource();
     const results = eventSource.search(filters);
@@ -334,12 +315,7 @@ router.get('/search', async (req, res) => {
     }));
 
   } catch (error) {
-    res.status(500).json(
-      createResponse(false, null, { 
-        code: 'INTERNAL_ERROR', 
-        message: 'Internal server error' 
-      })
-    );
+    sendError(res, 500, 'INTERNAL_ERROR', 'Internal server error');
   }
 });
 

@@ -91,58 +91,62 @@ function buildRetryViewFromTimeline(correlationId, timeline) {
   }
 
   // Filter retry phase steps
-  const retrySteps = timeline.steps.filter(step => 
+  const retrySteps = timeline && timeline.steps ? timeline.steps.filter(step => 
     step.phase === 'retry' && step.correlationId === correlationId
-  );
+  ) : [];
 
   // Count retry attempts from retry_attempt_started events
-  const attemptSteps = retrySteps.filter(step => 
+  const attemptSteps = retrySteps ? retrySteps.filter(step => 
     step.eventName === 'retry_attempt_started'
-  );
+  ) : [];
   const attempts = attemptSteps.length;
 
   // Extract max attempts from any retry step
   let maxAttempts = null;
-  for (const step of retrySteps) {
-    if (step.reason && step.reason.maxAttempts) {
-      maxAttempts = step.reason.maxAttempts;
-      break;
-    }
-    if (step.reason && step.reason.max_attempts) {
-      maxAttempts = step.reason.max_attempts;
-      break;
+  if (retrySteps && retrySteps.length > 0) {
+    for (const step of retrySteps) {
+      if (step.reason && step.reason.maxAttempts) {
+        maxAttempts = step.reason.maxAttempts;
+        break;
+      }
+      if (step.reason && step.reason.max_attempts) {
+        maxAttempts = step.reason.max_attempts;
+        break;
+      }
     }
   }
 
   // Check if retries were scheduled
-  const scheduledSteps = retrySteps.filter(step => 
+  const scheduledSteps = retrySteps ? retrySteps.filter(step => 
     step.eventName === 'retry_scheduled'
-  );
+  ) : [];
   const retryScheduled = scheduledSteps.length > 0;
 
   // Extract retry delays
   const retryDelays = [];
-  scheduledSteps.forEach(step => {
-    if (step.reason) {
-      const delay = step.reason.delayMs || 
-                   step.reason.delay || 
-                   step.reason.backoffMs;
-      if (typeof delay === 'number' && delay >= 0) {
-        retryDelays.push(delay);
+  if (scheduledSteps && scheduledSteps.length > 0) {
+    scheduledSteps.forEach(step => {
+      if (step.reason) {
+        const delay = step.reason.delayMs || 
+                     step.reason.delay || 
+                     step.reason.backoffMs;
+        if (typeof delay === 'number' && delay >= 0) {
+          retryDelays.push(delay);
+        }
       }
-    }
-  });
+    });
+  }
 
   // Check for exhaustion
-  const exhaustedSteps = retrySteps.filter(step => 
+  const exhaustedSteps = retrySteps ? retrySteps.filter(step => 
     step.eventName === 'retry_exhausted'
-  );
+  ) : [];
   const exhausted = exhaustedSteps.length > 0;
 
   // Check for deadletter
-  const deadletterSteps = retrySteps.filter(step => 
+  const deadletterSteps = retrySteps ? retrySteps.filter(step => 
     step.eventName === 'job_deadlettered'
-  );
+  ) : [];
   const deadlettered = deadletterSteps.length > 0;
 
   // Get terminal event
@@ -171,6 +175,10 @@ function buildRetryViewFromTimeline(correlationId, timeline) {
  * @returns {Object|null} Terminal retry step or null
  */
 function getTerminalRetryStep(retrySteps) {
+  if (!retrySteps || retrySteps.length === 0) {
+    return null;
+  }
+
   // Look for terminal events in order of finality
   const terminalEventNames = [
     'job_deadlettered',
@@ -183,6 +191,7 @@ function getTerminalRetryStep(retrySteps) {
     const steps = retrySteps.filter(step => step.eventName === eventName);
     if (steps.length > 0) {
       // Return the last occurrence
+      if (!Array.isArray(steps) || steps.length === 0) return null;
       return steps[steps.length - 1];
     }
   }
