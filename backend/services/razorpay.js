@@ -1,4 +1,7 @@
 const Razorpay = require('razorpay');
+const Logger = require('./logger');
+
+const logger = new Logger('razorpay');
 
 let razorpay = null;
 let lastKeyId = null;
@@ -11,7 +14,13 @@ const getRazorpay = () => {
       key_secret: process.env.RAZORPAY_KEY_SECRET
     });
     lastKeyId = process.env.RAZORPAY_KEY_ID;
-    console.log('🔑 Razorpay instance created/refreshed');
+    logger.info('razorpay_instance_refreshed', {
+      level: 'info',
+      component: 'razorpay',
+      event: 'razorpay_instance_refreshed',
+      timestamp: new Date().toISOString(),
+      context: { keyId: process.env.RAZORPAY_KEY_ID?.substring(0, 8) }
+    });
   }
   return razorpay;
 };
@@ -28,7 +37,12 @@ const razorpayService = {
       const order = await getRazorpay().orders.create(options);
       return order;
     } catch (error) {
-      console.error('Razorpay create order error:', error.message);
+      logger.error('razorpay_order_creation_failed', {
+        errorCategory: 'provider',
+        origin: 'razorpay',
+        finality: 'retryable',
+        errorMessage: error.message
+      });
       throw error;
     }
   },
@@ -43,17 +57,15 @@ const razorpayService = {
       }
       // Ensure it's 10 digits
       if (cleanPhone.length !== 10) {
-        console.error('Invalid phone number length:', cleanPhone.length, 'Phone:', customerPhone);
+        logger.error('invalid_phone_length', {
+          errorCategory: 'validation',
+          origin: 'razorpay',
+          finality: 'terminal',
+          phoneLength: cleanPhone.length,
+          customerPhone
+        });
       }
       const formattedPhone = '+91' + cleanPhone;
-      
-      console.log('Creating Razorpay payment link:', { 
-        amount, 
-        orderId, 
-        originalPhone: customerPhone,
-        formattedPhone,
-        customerName 
-      });
       
       const paymentLinkOptions = {
         amount: amount * 100,
@@ -71,21 +83,31 @@ const razorpayService = {
         callback_method: 'get'
       };
       
-      console.log('Payment link options:', JSON.stringify(paymentLinkOptions, null, 2));
+      logger.info('payment_link_options', {
+        level: 'info',
+        component: 'razorpay',
+        event: 'payment_link_options',
+        timestamp: new Date().toISOString(),
+        context: { amount: paymentLinkOptions.amount, currency: paymentLinkOptions.currency }
+      });
       
       const paymentLink = await getRazorpay().paymentLink.create(paymentLinkOptions);
-      console.log('✅ Payment link created:', paymentLink.short_url, 'ID:', paymentLink.id);
+      logger.info('payment_link_created', {
+        level: 'info',
+        component: 'razorpay',
+        event: 'payment_link_created',
+        timestamp: new Date().toISOString(),
+        context: { shortUrl: paymentLink.short_url, linkId: paymentLink.id }
+      });
       return paymentLink;
     } catch (error) {
-      console.error('❌ Razorpay payment link error:', {
-        message: error.message,
-        code: error.error?.code,
-        description: error.error?.description,
-        field: error.error?.field,
-        source: error.error?.source,
-        step: error.error?.step,
-        reason: error.error?.reason,
-        metadata: error.error?.metadata
+      logger.error('payment_link_creation_failed', {
+        errorCategory: 'provider',
+        origin: 'razorpay',
+        finality: 'retryable',
+        errorCode: error.error?.code,
+        errorMessage: error.message,
+        errorDescription: error.error?.description
       });
       throw error;
     }
@@ -96,20 +118,24 @@ const razorpayService = {
     const RETRY_DELAY_MS = 5000; // 5 seconds between retries
     
     try {
-      console.log('💰 Attempting refund:', { paymentId, amountInRupees: amount, attempt: retryCount + 1 });
+      logger.info('refund_attempt', {
+        level: 'info',
+        component: 'razorpay',
+        event: 'refund_attempt',
+        timestamp: new Date().toISOString(),
+        context: { paymentId, amountInRupees: amount, attempt: retryCount + 1 }
+      });
       
       // First fetch payment details to verify it's refundable
       const payment = await getRazorpay().payments.fetch(paymentId);
       const paymentAmountInRupees = payment.amount / 100;
       
-      console.log('💰 Payment details:', { 
-        status: payment.status, 
-        amountInPaise: payment.amount,
-        amountInRupees: paymentAmountInRupees,
-        captured: payment.captured,
-        refund_status: payment.refund_status,
-        amount_refunded: payment.amount_refunded,
-        created_at: new Date(payment.created_at * 1000).toISOString()
+      logger.info('payment_details_fetched', {
+        level: 'info',
+        component: 'razorpay',
+        event: 'payment_details_fetched',
+        timestamp: new Date().toISOString(),
+        context: { status: payment.status, amountInRupees: paymentAmountInRupees, captured: payment.captured }
       });
       
       // Check if payment is captured and not already refunded
@@ -128,7 +154,13 @@ const razorpayService = {
       
       if (paymentAge < MIN_PAYMENT_AGE_MS) {
         const waitTime = Math.min(MIN_PAYMENT_AGE_MS - paymentAge, 30000); // Wait up to 30 seconds
-        console.log(`⏳ Payment is ${Math.round(paymentAge / 1000)}s old, waiting ${Math.round(waitTime / 1000)}s before refund...`);
+        logger.info('payment_age_wait', {
+          level: 'info',
+          component: 'razorpay',
+          event: 'payment_age_wait',
+          timestamp: new Date().toISOString(),
+          context: { paymentAgeSeconds: Math.round(paymentAge / 1000), waitSeconds: Math.round(waitTime / 1000) }
+        });
         await new Promise(resolve => setTimeout(resolve, waitTime));
       }
       
@@ -136,9 +168,12 @@ const razorpayService = {
       const refundAmountInPaise = Math.round(amount * 100);
       const availableForRefund = payment.amount - (payment.amount_refunded || 0);
       
-      console.log('💰 Refund calculation:', {
-        requestedRefundInPaise: refundAmountInPaise,
-        availableForRefundInPaise: availableForRefund
+      logger.info('refund_calculation', {
+        level: 'info',
+        component: 'razorpay',
+        event: 'refund_calculation',
+        timestamp: new Date().toISOString(),
+        context: { requestedRefundInPaise: refundAmountInPaise, availableForRefundInPaise: availableForRefund }
       });
       
       // Validate refund amount doesn't exceed available amount
@@ -149,23 +184,37 @@ const razorpayService = {
       }
       
       // Process refund using payments.refund (Razorpay SDK v2.x method)
-      console.log('💰 Calling Razorpay refund API:', { paymentId, amountInPaise: finalRefundAmount });
+      logger.info('refund_api_call', {
+        level: 'info',
+        component: 'razorpay',
+        event: 'refund_api_call',
+        timestamp: new Date().toISOString(),
+        context: { paymentId, amountInPaise: finalRefundAmount }
+      });
       
       // SDK v2.x: payments.refund(paymentId, options)
       const refund = await getRazorpay().payments.refund(paymentId, {
         amount: finalRefundAmount
       });
       
-      console.log('✅ Refund successful:', refund.id, 'Amount:', finalRefundAmount / 100);
+      logger.info('refund_successful', {
+        level: 'info',
+        component: 'razorpay',
+        event: 'refund_successful',
+        timestamp: new Date().toISOString(),
+        context: { refundId: refund.id, amountRefunded: finalRefundAmount / 100 }
+      });
       return refund;
     } catch (error) {
       const errorCode = error.error?.code || error.code;
       const errorDesc = error.error?.description || error.message;
       
-      console.error('❌ Razorpay refund error:', {
-        message: error.message,
-        code: errorCode,
-        description: errorDesc,
+      logger.error('refund_api_error', {
+        errorCategory: 'provider',
+        origin: 'razorpay',
+        finality: 'retryable',
+        errorCode,
+        errorMessage: error.message,
         paymentId,
         amount,
         attempt: retryCount + 1
@@ -175,7 +224,13 @@ const razorpayService = {
       if ((errorCode === 'SERVER_ERROR' || errorCode === 'GATEWAY_ERROR' || 
            (errorCode === 'BAD_REQUEST_ERROR' && errorDesc === 'invalid request sent')) && retryCount < MAX_RETRIES) {
         const retryDelay = errorCode === 'BAD_REQUEST_ERROR' ? 30000 : RETRY_DELAY_MS; // 30s for timing issues
-        console.log(`🔄 Retrying refund in ${retryDelay / 1000} seconds... (attempt ${retryCount + 2}/${MAX_RETRIES + 1})`);
+        logger.info('refund_retry_scheduled', {
+          level: 'info',
+          component: 'razorpay',
+          event: 'refund_retry_scheduled',
+          timestamp: new Date().toISOString(),
+          context: { retryDelaySeconds: retryDelay / 1000, attempt: retryCount + 2, maxAttempts: MAX_RETRIES + 1 }
+        });
         await new Promise(resolve => setTimeout(resolve, retryDelay));
         return this.refund(paymentId, amount, retryCount + 1);
       }
@@ -188,7 +243,13 @@ const razorpayService = {
     try {
       return await getRazorpay().payments.fetch(paymentId);
     } catch (error) {
-      console.error('Razorpay fetch payment error:', error.message);
+      logger.error('razorpay_payment_fetch_failed', {
+        errorCategory: 'provider',
+        origin: 'razorpay',
+        finality: 'retryable',
+        paymentId,
+        errorMessage: error.message
+      });
       throw error;
     }
   }

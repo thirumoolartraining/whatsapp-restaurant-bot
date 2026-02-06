@@ -3,6 +3,9 @@ const router = express.Router();
 const whatsappBroadcast = require('../services/whatsappBroadcast');
 const authenticate = require('../middleware/authenticate');
 const authorize = require('../middleware/authorize');
+const Logger = require('../services/logger');
+
+const logger = new Logger('whatsappBroadcast');
 
 // Get all WhatsApp contacts
 router.get('/contacts', authenticate, authorize(['admin']), async (req, res) => {
@@ -46,19 +49,13 @@ router.post('/send-offer', authenticate, authorize(['admin']), async (req, res) 
       });
     }
 
-    console.log(`[WhatsApp Broadcast] Starting offer broadcast...`);
-    console.log(`[WhatsApp Broadcast] Offer: ${offerTitle || 'No title'}`);
-    console.log(`[WhatsApp Broadcast] Type: ${offerType || 'No type'}`);
-
     // Send offers and wait for actual results
     const result = await whatsappBroadcast.sendOfferToAll(offerImageUrl, offerTitle, offerDescription, offerType);
     
-    console.log('[WhatsApp Broadcast] Offer sending completed:', {
-      total: result.total,
-      sent: result.sent,
-      sentViaInteractive: result.sentViaInteractive,
-      sentViaTemplate: result.sentViaTemplate,
-      failed: result.failed
+    res.json({
+      success: true,
+      message: 'Offer broadcast completed',
+      result
     });
     
     // Build detailed message for admin
@@ -114,7 +111,12 @@ router.post('/send-offer', authenticate, authorize(['admin']), async (req, res) 
     });
 
   } catch (error) {
-    console.error('[WhatsApp Broadcast] Error:', error);
+    logger.error('whatsapp_broadcast_failed', {
+      errorCategory: 'provider',
+      origin: 'whatsapp_broadcast',
+      finality: 'retryable',
+      errorMessage: error.message
+    });
     res.status(500).json({ success: false, error: error.message });
   }
 });
@@ -131,14 +133,17 @@ router.post('/test-send', authenticate, authorize(['admin']), async (req, res) =
       });
     }
 
-    console.log(`[WhatsApp Broadcast] Testing offer send to ${phone}...`);
-
     const result = await whatsappBroadcast.sendOfferToSingle(phone, offerImageUrl, offerTitle, offerDescription, offerType);
     
     res.json(result);
 
   } catch (error) {
-    console.error('[WhatsApp Broadcast] Test send error:', error);
+    logger.error('whatsapp_broadcast_test_failed', {
+      errorCategory: 'provider',
+      origin: 'whatsapp_broadcast',
+      finality: 'retryable',
+      errorMessage: error.message
+    });
     res.status(500).json({ success: false, error: error.message });
   }
 });

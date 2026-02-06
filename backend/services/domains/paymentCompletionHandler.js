@@ -77,7 +77,13 @@ async function handlePaymentSuccess(order, razorpay_payment_id = null, correlati
 
   // Update Google Sheets
   googleSheets.updateOrderStatus(order.orderId, 'confirmed', 'paid').catch(err =>
-    console.error('Google Sheets sync error:', err)
+    logger.error('google_sheets_sync_failed', {
+      errorCategory: 'provider',
+      origin: 'google_sheets',
+      finality: 'retryable',
+      orderId: order.orderId,
+      errorMessage: err.message
+    })
   );
 
   // Build detailed order confirmation message
@@ -118,7 +124,13 @@ async function handlePaymentSuccess(order, razorpay_payment_id = null, correlati
       ]);
     }
   } catch (whatsappErr) {
-    console.error('WhatsApp notification failed:', whatsappErr.message);
+    logger.error('whatsapp_notification_failed', {
+      errorCategory: 'provider',
+      origin: 'whatsapp',
+      finality: 'retryable',
+      orderId: order.orderId,
+      errorMessage: whatsappErr.message
+    });
   }
 
   // Send email if available
@@ -126,7 +138,13 @@ async function handlePaymentSuccess(order, razorpay_payment_id = null, correlati
     try {
       await brevoMail.sendOrderConfirmation(order.customer.email, order);
     } catch (emailErr) {
-      console.error('Email error:', emailErr.message);
+      logger.error('email_notification_failed', {
+        errorCategory: 'provider',
+        origin: 'email',
+        finality: 'retryable',
+        orderId: order.orderId,
+        errorMessage: emailErr.message
+      });
     }
   }
 
@@ -167,7 +185,13 @@ async function handleWebhookPaymentSuccess(order, payment, correlationId = null,
     
     // Update Google Sheets
     googleSheets.updateOrderStatus(order.orderId, 'confirmed', 'paid').catch(err =>
-      console.error('Google Sheets sync error:', err)
+      logger.error('google_sheets_sync_failed', {
+        errorCategory: 'provider',
+        origin: 'google_sheets',
+        finality: 'retryable',
+        orderId: order.orderId,
+        errorMessage: err.message
+      })
     );
   }
   
@@ -196,7 +220,13 @@ async function handleCallbackPaymentSuccess(order, razorpay_payment_id, correlat
 
   // Update Google Sheets
   googleSheets.updateOrderStatus(order.orderId, 'confirmed', 'paid').catch(err =>
-    console.error('Google Sheets sync error:', err)
+    logger.error('google_sheets_sync_failed', {
+      errorCategory: 'provider',
+      origin: 'google_sheets',
+      finality: 'retryable',
+      orderId: order.orderId,
+      errorMessage: err.message
+    })
   );
 
   // Build detailed order confirmation message
@@ -241,7 +271,13 @@ async function handleCallbackPaymentSuccess(order, razorpay_payment_id, correlat
     try {
       await brevoMail.sendOrderConfirmation(order.customer.email, order);
     } catch (emailErr) {
-      console.error('Email error:', emailErr.message);
+      logger.error('email_notification_failed', {
+        errorCategory: 'provider',
+        origin: 'email',
+        finality: 'retryable',
+        orderId: order.orderId,
+        errorMessage: emailErr.message
+      });
     }
   }
 
@@ -286,7 +322,13 @@ async function handleRefundSuccess(order, refund, correlationId = null, messageI
   
   // Update Google Sheets - move to refunded sheet
   googleSheets.updateOrderStatus(order.orderId, 'refunded', 'refunded').catch(err =>
-    console.error('Google Sheets sync error:', err)
+    logger.error('google_sheets_sync_failed', {
+      errorCategory: 'provider',
+      origin: 'google_sheets',
+      finality: 'retryable',
+      orderId: order.orderId,
+      errorMessage: err.message
+    })
   );
   
   // Notify customer
@@ -299,7 +341,13 @@ async function handleRefundSuccess(order, refund, correlationId = null, messageI
       ]
     );
   } catch (whatsappErr) {
-    console.error('WhatsApp notification failed:', whatsappErr.message);
+    logger.error('whatsapp_notification_failed', {
+      errorCategory: 'provider',
+      origin: 'whatsapp',
+      finality: 'retryable',
+      orderId: order.orderId,
+      errorMessage: whatsappErr.message
+    });
   }
   
   logger.logDomainHandlerExit('payment', 'handleRefundSuccess', true, 'refund_successful', correlationId, messageId);
@@ -332,7 +380,13 @@ async function handleRefundFailure(order, refund, correlationId = null, messageI
   
   // Update Google Sheets - move to refundfailed sheet
   googleSheets.updateOrderStatus(order.orderId, 'refund_failed', 'refund_failed').catch(err =>
-    console.error('Google Sheets sync error:', err)
+    logger.error('google_sheets_sync_failed', {
+      errorCategory: 'provider',
+      origin: 'google_sheets',
+      finality: 'retryable',
+      orderId: order.orderId,
+      errorMessage: err.message
+    })
   );
   
   // Notify customer
@@ -345,7 +399,13 @@ async function handleRefundFailure(order, refund, correlationId = null, messageI
       ]
     );
   } catch (whatsappErr) {
-    console.error('WhatsApp notification failed:', whatsappErr.message);
+    logger.error('whatsapp_notification_failed', {
+      errorCategory: 'provider',
+      origin: 'whatsapp',
+      finality: 'retryable',
+      orderId: order.orderId,
+      errorMessage: whatsappErr.message
+    });
   }
   
   logger.logDomainHandlerExit('payment', 'handleRefundFailure', true, 'refund_failure_handled', correlationId, messageId);

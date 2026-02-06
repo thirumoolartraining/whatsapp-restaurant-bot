@@ -2,7 +2,10 @@ const express = require('express');
 const Settings = require('../models/Settings');
 const authenticate = require('../middleware/authenticate');
 const authorize = require('../middleware/authorize');
+const Logger = require('../services/logger');
 const router = express.Router();
+
+const logger = new Logger('settings');
 
 // Get all settings (admin only)
 router.get('/', authenticate, authorize(['admin']), async (req, res) => {
@@ -14,7 +17,12 @@ router.get('/', authenticate, authorize(['admin']), async (req, res) => {
     });
     res.json(settingsObj);
   } catch (error) {
-    console.error('Error fetching settings:', error);
+    logger.error('settings_fetch_failed', {
+      errorCategory: 'domain',
+      origin: 'settings',
+      finality: 'terminal',
+      errorMessage: error.message
+    });
     res.status(500).json({ error: error.message });
   }
 });
@@ -25,7 +33,13 @@ router.get('/:key', async (req, res) => {
     const value = await Settings.getValue(req.params.key);
     res.json({ key: req.params.key, value });
   } catch (error) {
-    console.error('Error fetching setting:', error);
+    logger.error('setting_fetch_failed', {
+      errorCategory: 'domain',
+      origin: 'settings',
+      finality: 'terminal',
+      key: req.params.key,
+      errorMessage: error.message
+    });
     res.status(500).json({ error: error.message });
   }
 });
@@ -35,10 +49,15 @@ router.put('/:key', authenticate, authorize(['admin']), async (req, res) => {
   try {
     const { value } = req.body;
     const setting = await Settings.setValue(req.params.key, value, req.user?.username);
-    console.log(`[Settings] Updated ${req.params.key} to ${JSON.stringify(value)} by ${req.user?.username}`);
     res.json(setting);
   } catch (error) {
-    console.error('Error updating setting:', error);
+    logger.error('setting_update_failed', {
+      errorCategory: 'domain',
+      origin: 'settings',
+      finality: 'terminal',
+      key: req.params.key,
+      errorMessage: error.message
+    });
     res.status(500).json({ error: error.message });
   }
 });
@@ -49,10 +68,14 @@ router.post('/holiday/toggle', authenticate, authorize(['admin']), async (req, r
     const currentValue = await Settings.getValue('holidayMode', false);
     const newValue = !currentValue;
     const setting = await Settings.setValue('holidayMode', newValue, req.user?.username);
-    console.log(`[Settings] Holiday mode ${newValue ? 'ENABLED' : 'DISABLED'} by ${req.user?.username}`);
     res.json({ holidayMode: newValue });
   } catch (error) {
-    console.error('Error toggling holiday mode:', error);
+    logger.error('holiday_mode_toggle_failed', {
+      errorCategory: 'domain',
+      origin: 'settings',
+      finality: 'terminal',
+      errorMessage: error.message
+    });
     res.status(500).json({ error: error.message });
   }
 });
@@ -63,7 +86,12 @@ router.get('/holiday/status', async (req, res) => {
     const holidayMode = await Settings.getValue('holidayMode', false);
     res.json({ holidayMode });
   } catch (error) {
-    console.error('Error fetching holiday status:', error);
+    logger.error('holiday_status_fetch_failed', {
+      errorCategory: 'domain',
+      origin: 'settings',
+      finality: 'terminal',
+      errorMessage: error.message
+    });
     res.status(500).json({ error: error.message });
   }
 });

@@ -10,7 +10,10 @@ const chatbotImagesService = require('../services/chatbotImages');
 const authenticate = require('../middleware/authenticate');
 const authorize = require('../middleware/authorize');
 const paymentCompletionHandler = require('../services/domains/paymentCompletionHandler');
+const Logger = require('../services/logger');
 const router = express.Router();
+
+const logger = new Logger('payment');
 
 // Create Razorpay order for UPI intent payment (no auth required - public endpoint)
 router.post('/create-upi-order', async (req, res) => {
@@ -47,7 +50,12 @@ router.post('/create-upi-order', async (req, res) => {
       merchantName: process.env.MERCHANT_NAME || 'Restaurant'
     });
   } catch (error) {
-    console.error('Create UPI order error:', error);
+    logger.error('upi_order_creation_failed', {
+      errorCategory: 'provider',
+      origin: 'payment',
+      finality: 'terminal',
+      errorMessage: error.message
+    });
     res.status(500).json({ error: error.message });
   }
 });
@@ -70,7 +78,12 @@ router.post('/verify-upi', async (req, res) => {
 
     res.json(result);
   } catch (error) {
-    console.error('Verify UPI payment error:', error);
+    logger.error('upi_payment_verification_failed', {
+      errorCategory: 'provider',
+      origin: 'payment',
+      finality: 'terminal',
+      errorMessage: error.message
+    });
     res.status(500).json({ error: error.message });
   }
 });
@@ -91,13 +104,11 @@ router.post('/razorpay-webhook', express.raw({ type: 'application/json' }), asyn
         .digest('hex');
       
       if (signature !== expectedSignature) {
-        console.log('❌ Razorpay webhook signature mismatch');
         return res.status(400).json({ error: 'Invalid signature' });
       }
     }
     
     const event = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
-    console.log('📥 Razorpay webhook event:', event.event);
     
     const payload = event.payload;
     
@@ -107,11 +118,9 @@ router.post('/razorpay-webhook', express.raw({ type: 'application/json' }), asyn
       const paymentId = refund?.payment_id;
       
       if (!paymentId) {
-        console.log('⚠️ No payment ID in refund webhook');
         return res.json({ status: 'ok' });
       }
       
-      console.log('💰 Refund webhook received:', { refundId: refund.id, paymentId, amount: refund.amount / 100, status: refund.status });
       
       // Find order by payment ID
       const order = await Order.findOne({ 
@@ -122,7 +131,6 @@ router.post('/razorpay-webhook', express.raw({ type: 'application/json' }), asyn
       });
       
       if (!order) {
-        console.log('⚠️ Order not found for payment:', paymentId);
         return res.json({ status: 'ok' });
       }
       
@@ -143,7 +151,6 @@ router.post('/razorpay-webhook', express.raw({ type: 'application/json' }), asyn
         return res.json({ status: 'ok' });
       }
       
-      console.log('❌ Refund failed webhook:', { refundId: refund.id, paymentId, reason: refund.failure_reason });
       
       const order = await Order.findOne({ 
         $or: [
@@ -178,7 +185,12 @@ router.post('/razorpay-webhook', express.raw({ type: 'application/json' }), asyn
     
     res.json({ status: 'ok' });
   } catch (error) {
-    console.error('❌ Razorpay webhook error:', error);
+    logger.error('razorpay_webhook_failed', {
+      errorCategory: 'provider',
+      origin: 'payment',
+      finality: 'terminal',
+      errorMessage: error.message
+    });
     res.status(500).json({ error: error.message });
   }
 });
@@ -215,7 +227,12 @@ router.get('/callback', async (req, res) => {
       </html>
     `);
   } catch (error) {
-    console.error('Payment callback error:', error);
+    logger.error('payment_callback_failed', {
+      errorCategory: 'provider',
+      origin: 'payment',
+      finality: 'terminal',
+      errorMessage: error.message
+    });
     res.send('<html><body><h1>Payment Error</h1><p>Please contact support.</p></body></html>');
   }
 });
@@ -236,7 +253,13 @@ router.post('/refund/:orderId', authenticate, authorize(['admin']), async (req, 
 
       res.json({ success: true, message: 'Refund processed', refundId: refund.id, orderId: order.orderId });
     } catch (refundError) {
-      console.error('Refund failed:', refundError.message);
+      logger.error('refund_failed', {
+        errorCategory: 'provider',
+        origin: 'payment',
+        finality: 'retryable',
+        orderId: order.orderId,
+        errorMessage: refundError.message
+      });
       
       const failedRefund = {
         id: 'failed',
@@ -274,7 +297,13 @@ router.post('/process-refund/:orderId', authenticate, authorize(['admin']), asyn
 
       res.json({ success: true, message: 'Refund processed', refundId: refund.id });
     } catch (refundError) {
-      console.error('Refund processing failed:', refundError.message);
+      logger.error('refund_processing_failed', {
+        errorCategory: 'provider',
+        origin: 'payment',
+        finality: 'retryable',
+        orderId: order.orderId,
+        errorMessage: refundError.message
+      });
       
       const failedRefund = {
         id: 'failed',

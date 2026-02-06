@@ -3,6 +3,9 @@ const Customer = require('../models/Customer');
 const DashboardStats = require('../models/DashboardStats');
 const ReportHistory = require('../models/ReportHistory');
 const dataEvents = require('./eventEmitter');
+const Logger = require('./logger');
+
+const logger = new Logger('orderCleanup');
 
 // COST-SAVING: Orders are now hidden INSTANTLY after delivered/cancelled (in routes)
 // This cleanup is just a fallback for any orders that might have been missed
@@ -107,10 +110,15 @@ const orderCleanup = {
 
         report.updatedAt = new Date();
         await report.save();
-        console.log(`📊 Report history saved for ${dateStr}: ${dateOrders.length} orders`);
       }
     } catch (error) {
-      console.error('❌ Error saving report history:', error.message);
+      logger.error('report_history_save_failed', {
+        errorCategory: 'domain',
+        origin: 'order_cleanup',
+        finality: 'retryable',
+        dateStr,
+        errorMessage: error.message
+      });
     }
   },
 
@@ -132,10 +140,14 @@ const orderCleanup = {
       // Also save to report history
       await this.saveReportHistory(orders);
       
-      console.log(`📊 Cleanup stats saved: ${orders.length} orders, ₹${revenue} revenue`);
       return stats;
     } catch (error) {
-      console.error('❌ Error saving cleanup stats:', error.message);
+      logger.error('cleanup_stats_save_failed', {
+        errorCategory: 'domain',
+        origin: 'order_cleanup',
+        finality: 'retryable',
+        errorMessage: error.message
+      });
     }
   },
 
@@ -154,7 +166,6 @@ const orderCleanup = {
           // Customer never placed an order, safe to delete
           const result = await Customer.deleteOne({ phone });
           if (result.deletedCount > 0) {
-            console.log(`👤 Deleted customer: ${phone} (never placed an order)`);
             return true;
           }
         }
@@ -162,7 +173,13 @@ const orderCleanup = {
       }
       return false;
     } catch (error) {
-      console.error(`❌ Error deleting customer ${phone}:`, error.message);
+      logger.error('customer_deletion_failed', {
+        errorCategory: 'domain',
+        origin: 'order_cleanup',
+        finality: 'retryable',
+        phone,
+        errorMessage: error.message
+      });
       return false;
     }
   },
@@ -183,19 +200,21 @@ const orderCleanup = {
         return 0;
       }
       
-      console.log(`🧹 Found ${ordersToHide.length} completed orders to hide (status updated >1 hour ago)`);
+      logger.info('Found completed orders to hide', {
+        count: ordersToHide.length
+      });
       
       // Save cumulative stats before hiding (for total revenue/orders tracking)
       await this.saveOrderStats(ordersToHide);
       
-      // Hide the orders instead of deleting
-      const orderIds = ordersToHide.map(o => o._id);
       const result = await Order.updateMany(
-        { _id: { $in: orderIds } },
+        { _id: { $in: ordersToHide.map(o => o._id) } },
         { $set: { isHidden: true } }
       );
       
-      console.log(`✅ Hidden ${result.modifiedCount} delivered/cancelled/refunded orders from admin dashboard`);
+      logger.info('Hidden completed orders', {
+        count: result.modifiedCount
+      });
       
       // Emit event to update frontend
       dataEvents.emit('orders');
@@ -203,14 +222,18 @@ const orderCleanup = {
       
       return result.modifiedCount;
     } catch (error) {
-      console.error('❌ Error hiding completed orders:', error.message);
+      logger.error('order_hide_failed', {
+        errorCategory: 'domain',
+        origin: 'order_cleanup',
+        finality: 'retryable',
+        errorMessage: error.message
+      });
       return 0;
     }
   },
 
   // Start the scheduler (runs every 2 minutes for quick fallback cleanup)
   start() {
-    console.log(`🧹 Order cleanup scheduler started - fallback cleanup for delivered/cancelled/refunded orders after ${CLEANUP_DELAY_MINUTES} minute(s)`);
     
     // Run immediately on start
     this.cleanupCompletedOrders();

@@ -6,6 +6,9 @@ const path = require('path');
 const dataEvents = require('./services/eventEmitter');
 const corsConfig = require('./config/corsConfig');
 const { authLimiter, adminLimiter, webhookLimiter } = require('./middleware/rateLimit');
+const Logger = require('./services/logger');
+
+const logger = new Logger('server');
 
 // Validate environment variables before starting
 const validateEnv = require('./config/validateEnv');
@@ -45,13 +48,16 @@ app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // Log all API requests for debugging
 app.use('/api', (req, res, next) => {
-  console.log(`📥 ${req.method} ${req.originalUrl}`);
   next();
 });
 
 mongoose.connect(process.env.MONGODB_URI)
   .then(async () => {
-    console.log('MongoDB connected');
+    logger.info('mongodb_connected', {
+      component: 'server',
+      event: 'mongodb_connected',
+      timestamp: new Date().toISOString()
+    });
     // Start schedulers after DB connection
     orderScheduler.start();
     dailyCleanup.start();
@@ -60,14 +66,24 @@ mongoose.connect(process.env.MONGODB_URI)
     cartCleanup.startCartCleanupScheduler();
     
     // Initialize Google Sheets (cost-saving sheets)
-    console.log('📊 Initializing Google Sheets...');
     await googleSheets.initializeWhatsAppContactsSheet();
     await googleSheets.initializeDailyReportsSheet();
     await googleSheets.initializeDashboardStatsSheet();
     await googleSheets.initializeCustomersSheet();
-    console.log('✅ Google Sheets initialized');
+    logger.info('google_sheets_initialized', {
+      component: 'server',
+      event: 'google_sheets_initialized',
+      timestamp: new Date().toISOString()
+    });
   })
-  .catch(err => console.error('MongoDB connection error:', err));
+  .catch(err => {
+    logger.error('mongodb_connection_failed', {
+      errorCategory: 'infrastructure',
+      origin: 'server',
+      finality: 'terminal',
+      errorMessage: err.message
+    });
+  });
 
 app.use('/api/auth', authLimiter, authRoutes);
 app.use('/api/menu', menuRoutes);
@@ -129,7 +145,6 @@ dataEvents.on('deliveryboys', () => broadcast('deliveryboys'));
 app.get('/api/test-sheets/:orderId/:status', async (req, res) => {
   const googleSheets = require('./services/googleSheets');
   const { orderId, status } = req.params;
-  console.log('🧪 Test sheets update:', orderId, status);
   try {
     const result = await googleSheets.updateOrderStatus(orderId, status, status === 'cancelled' ? 'cancelled' : null);
     res.json({ success: result, orderId, status });
@@ -142,7 +157,6 @@ app.get('/api/test-sheets/:orderId/:status', async (req, res) => {
 app.get('/api/sync-cancelled', async (req, res) => {
   const Order = require('./models/Order');
   const googleSheets = require('./services/googleSheets');
-  console.log('🔄 Syncing all cancelled orders to Google Sheets...');
   try {
     const cancelledOrders = await Order.find({ status: 'cancelled' });
     let synced = 0;
@@ -159,7 +173,6 @@ app.get('/api/sync-cancelled', async (req, res) => {
 // Sync pending refund orders to refundprocessing sheet
 app.get('/api/sync-pending-refunds', async (req, res) => {
   const googleSheets = require('./services/googleSheets');
-  console.log('🔄 Syncing pending refund orders to Google Sheets...');
   try {
     const result = await googleSheets.syncPendingRefunds();
     res.json({ success: result });
@@ -170,5 +183,10 @@ app.get('/api/sync-pending-refunds', async (req, res) => {
 
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+  logger.info('server_started', {
+    component: 'server',
+    event: 'server_started',
+    port: PORT,
+    timestamp: new Date().toISOString()
+  });
 });

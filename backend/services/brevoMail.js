@@ -1,10 +1,13 @@
 const SibApiV3Sdk = require('sib-api-v3-sdk');
+const Logger = require('./logger');
 
 const defaultClient = SibApiV3Sdk.ApiClient.instance;
 const apiKey = defaultClient.authentications['api-key'];
 apiKey.apiKey = process.env.BREVO_API_KEY;
 
 const apiInstance = new SibApiV3Sdk.TransactionalEmailsApi();
+
+const logger = new Logger('brevoMail');
 
 const brevoMail = {
   async sendOrderConfirmation(email, orderDetails) {
@@ -27,7 +30,13 @@ const brevoMail = {
       await apiInstance.sendTransacEmail(sendSmtpEmail);
       return true;
     } catch (error) {
-      console.error('Brevo email error:', error.message);
+      logger.error('brevo_order_email_failed', {
+        errorCategory: 'provider',
+        origin: 'brevo_mail',
+        finality: 'retryable',
+        email,
+        errorMessage: error.message
+      });
       return false;
     }
   },
@@ -98,10 +107,23 @@ const brevoMail = {
 
     try {
       await apiInstance.sendTransacEmail(sendSmtpEmail);
-      console.log(`📧 Delivery notification email sent to ${email}`);
       return true;
     } catch (error) {
-      console.error('Brevo delivery notification email error:', error.message);
+      logger.error('brevo_delivery_notification_failed', {
+        errorCategory: 'provider',
+        origin: 'brevo_mail',
+        finality: 'retryable',
+        email,
+        errorMessage: error.message
+      });
+      return false;
+    }
+        errorCategory: 'provider',
+        origin: 'brevo_mail',
+        finality: 'retryable',
+        email,
+        errorMessage: error.message
+      });
       return false;
     }
   },
@@ -122,7 +144,13 @@ const brevoMail = {
       await apiInstance.sendTransacEmail(sendSmtpEmail);
       return true;
     } catch (error) {
-      console.error('Brevo email error:', error.message);
+      logger.error('brevo_status_update_email_failed', {
+        errorCategory: 'provider',
+        origin: 'brevo_mail',
+        finality: 'retryable',
+        email,
+        errorMessage: error.message
+      });
       return false;
     }
   },
@@ -198,10 +226,23 @@ const brevoMail = {
 
     try {
       await apiInstance.sendTransacEmail(sendSmtpEmail);
-      console.log(`📧 Report email sent to ${email}`);
       return true;
     } catch (error) {
-      console.error('Brevo report email error:', error.message);
+      logger.error('brevo_report_email_failed', {
+        errorCategory: 'provider',
+        origin: 'brevo_mail',
+        finality: 'retryable',
+        email,
+        errorMessage: error.message
+      });
+      throw error;
+    }
+        errorCategory: 'provider',
+        origin: 'brevo_mail',
+        finality: 'retryable',
+        email,
+        errorMessage: error.message
+      });
       throw error;
     }
   }

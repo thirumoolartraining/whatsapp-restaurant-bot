@@ -106,6 +106,14 @@ function createWorker() {
       const jobName = job.name;
       const attemptNumber = job.attemptsMade + 1;
 
+      logger.info('worker_entry', {
+        level: 'info',
+        component: 'sendWhatsAppWorker',
+        event: 'worker_entry',
+        timestamp: new Date().toISOString(),
+        context: { correlationId, jobId: job.id, jobName, attemptNumber }
+      });
+
       logger.info('Processing WhatsApp job', {
         jobId: job.id,
         jobName,
@@ -319,6 +327,14 @@ function createWorker() {
           maxAttempts: job.opts.attempts || 1
         });
 
+        logger.info('worker_exit', {
+          level: 'info',
+          component: 'sendWhatsAppWorker',
+          event: 'worker_exit',
+          timestamp: new Date().toISOString(),
+          context: { correlationId, jobId: job.id, jobName, outcome: 'success', reason: 'job_completed' }
+        });
+
         return result;
       } catch (error) {
         // Extract retry decision information
@@ -423,6 +439,20 @@ function createWorker() {
           maxAttempts,
           errorCategory,
           willRetry: retryDecision && nextAttemptNumber <= maxAttempts
+        });
+        
+        logger.info('worker_exit', {
+          level: 'info',
+          component: 'sendWhatsAppWorker',
+          event: 'worker_exit',
+          timestamp: new Date().toISOString(),
+          context: { 
+            correlationId, 
+            jobId: job.id, 
+            jobName, 
+            outcome: retryDecision && nextAttemptNumber <= maxAttempts ? 'retried' : 'failed', 
+            reason: isFinalFailure ? 'final_failure' : 'retry_scheduled' 
+          }
         });
         
         throw error;

@@ -5,7 +5,10 @@ const MenuItem = require('../models/MenuItem');
 const DashboardStats = require('../models/DashboardStats');
 const authenticate = require('../middleware/authenticate');
 const authorize = require('../middleware/authorize');
+const Logger = require('../services/logger');
 const router = express.Router();
+
+const logger = new Logger('analytics');
 
 // Helper to get today's date string
 const getTodayString = () => {
@@ -43,7 +46,12 @@ const trackTodayRevenue = async (amount) => {
     
     return stats;
   } catch (error) {
-    console.error('Error tracking today revenue:', error.message);
+    logger.error('revenue_tracking_failed', {
+      errorCategory: 'domain',
+      origin: 'analytics',
+      finality: 'retryable',
+      errorMessage: error.message
+    });
   }
 };
 
@@ -529,7 +537,12 @@ router.get('/report', authenticate, authorize(['admin']), async (req, res) => {
       revenueTrend
     });
   } catch (error) {
-    console.error('Report error:', error);
+    logger.error('report_generation_failed', {
+      errorCategory: 'domain',
+      origin: 'analytics',
+      finality: 'terminal',
+      errorMessage: error.message
+    });
     res.status(500).json({ error: error.message });
   }
 });
@@ -599,7 +612,12 @@ router.post('/report/download-pdf', authenticate, authorize(['admin']), async (r
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
     res.send(pdfBuffer);
   } catch (error) {
-    console.error('PDF generation error:', error);
+    logger.error('pdf_generation_failed', {
+      errorCategory: 'provider',
+      origin: 'analytics',
+      finality: 'terminal',
+      errorMessage: error.message
+    });
     res.status(500).json({ error: error.message });
   }
 });
@@ -639,7 +657,12 @@ router.post('/report/send-email', authenticate, authorize(['admin']), async (req
     
     res.json({ success: true, message: `Report sent to ${reportEmail}` });
   } catch (error) {
-    console.error('Email send error:', error);
+    logger.error('email_send_failed', {
+      errorCategory: 'provider',
+      origin: 'analytics',
+      finality: 'retryable',
+      errorMessage: error.message
+    });
     res.status(500).json({ error: error.message });
   }
 });
@@ -713,7 +736,12 @@ router.get('/storage', authenticate, authorize(['admin']), async (req, res) => {
         plan: cloudinaryUsage.plan || 'Free'
       };
     } catch (cloudinaryError) {
-      console.error('Cloudinary usage fetch error:', cloudinaryError.message);
+      logger.error('cloudinary_usage_fetch_failed', {
+        errorCategory: 'provider',
+        origin: 'analytics',
+        finality: 'retryable',
+        errorMessage: cloudinaryError.message
+      });
       cloudinaryStats = { error: 'Unable to fetch Cloudinary stats' };
     }
     
@@ -732,7 +760,12 @@ router.get('/storage', authenticate, authorize(['admin']), async (req, res) => {
       timestamp: new Date().toISOString()
     });
   } catch (error) {
-    console.error('Storage stats error:', error);
+    logger.error('storage_stats_fetch_failed', {
+      errorCategory: 'provider',
+      origin: 'analytics',
+      finality: 'terminal',
+      errorMessage: error.message
+    });
     res.status(500).json({ error: error.message });
   }
 });
@@ -782,170 +815,12 @@ router.get('/jobs/failed', authenticate, authorize(['admin']), async (req, res) 
 
     res.json(jobMetadata);
   } catch (error) {
-    console.error('Failed jobs fetch error:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Replay Failed Job (Admin Only)
-router.post('/jobs/replay/:jobId', authenticate, authorize(['admin']), async (req, res) => {
-  try {
-    const { jobId } = req.params;
-    const BullMQQueue = require('../services/queue/bullmqQueue');
-    const { isRedisConnected } = require('../services/queue/redisClient');
-    const Logger = require('../services/logger');
-    const crypto = require('crypto');
-    
-    // Check if BullMQ is available
-    if (!isRedisConnected()) {
-      return res.status(501).json({ error: 'ASYNC_QUEUE_NOT_ENABLED' });
-    }
-
-    const bullmqQueue = new BullMQQueue();
-    const logger = new Logger('jobReplay');
-
-    // Task A: Fetch the failed job
-    const queue = bullmqQueue.getQueue('SEND_WHATSAPP_MESSAGE');
-    if (!queue) {
-      return res.status(500).json({ error: 'QUEUE_NOT_AVAILABLE' });
-    }
-
-    const job = await queue.getJob(jobId);
-    if (!job) {
-      return res.status(404).json({ error: 'JOB_NOT_FOUND' });
-    }
-
-    // Check if job is in failed state
-    if (job.finishedOn && !job.failedReason) {
-      return res.status(400).json({ error: 'JOB_NOT_FAILED' });
-    }
-
-    // Task B: Guardrails (STRICT)
-    
-    // 1) Check job name is whitelisted (SEND_WHATSAPP_MESSAGE only)
-    if (job.name !== 'SEND_WHATSAPP_MESSAGE') {
-      logger.warn('Replay blocked - wrong job type', {
-        jobId,
-        jobName: job.name,
-        requestedBy: req.user?.id || 'admin'
-      });
-      return res.status(400).json({ error: 'REPLAY_BLOCKED_JOB_TYPE' });
-    }
-
-    // 2) Check job.data.context exists and has correlationId
-    if (!job.data?.context?.correlationId) {
-      logger.warn('Replay blocked - missing correlationId', {
-        jobId,
-        jobName: job.name,
-        requestedBy: req.user?.id || 'admin'
-      });
-      return res.status(400).json({ error: 'REPLAY_BLOCKED_MISSING_CORRELATION' });
-    }
-
-    // 3) Check error category is 'transient'
-    let errorCategory = null;
-    if (job.data?.payload?.errorCategory) {
-      errorCategory = job.data.payload.errorCategory;
-    } else if (job.failedReason) {
-      // Try to derive from failedReason
-      const failedReason = job.failedReason.toLowerCase();
-      if (failedReason.includes('timeout') || 
-          failedReason.includes('network') || 
-          failedReason.includes('connection') ||
-          failedReason.includes('econnreset') ||
-          failedReason.includes('etimedout') ||
-          failedReason.includes('5') || // 5xx HTTP errors
-          failedReason.includes('rate limit')) {
-        errorCategory = 'transient';
-      } else if (failedReason.includes('unauthorized') ||
-                 failedReason.includes('forbidden') ||
-                 failedReason.includes('invalid') ||
-                 failedReason.includes('400') ||
-                 failedReason.includes('401') ||
-                 failedReason.includes('403')) {
-        errorCategory = 'policy';
-      }
-    }
-
-    if (!errorCategory) {
-      logger.warn('Replay blocked - unknown error category', {
-        jobId,
-        jobName: job.name,
-        failedReason: job.failedReason,
-        requestedBy: req.user?.id || 'admin'
-      });
-      return res.status(400).json({ error: 'REPLAY_BLOCKED_UNKNOWN_CATEGORY' });
-    }
-
-    if (errorCategory === 'policy') {
-      logger.warn('Replay blocked - policy failure', {
-        jobId,
-        jobName: job.name,
-        errorCategory,
-        requestedBy: req.user?.id || 'admin'
-      });
-      return res.status(400).json({ error: 'REPLAY_BLOCKED_POLICY_FAILURE' });
-    }
-
-    // 4) Check attempts exhausted OR job is failed
-    const maxAttempts = job.opts?.attempts || 1;
-    if (job.attemptsMade < maxAttempts && !job.failedReason) {
-      logger.warn('Replay blocked - attempts not exhausted', {
-        jobId,
-        jobName: job.name,
-        attemptsMade: job.attemptsMade,
-        maxAttempts,
-        requestedBy: req.user?.id || 'admin'
-      });
-      return res.status(400).json({ error: 'REPLAY_BLOCKED_NOT_EXHAUSTED' });
-    }
-
-    const originalCorrelationId = job.data.context.correlationId;
-    const requestedBy = req.user?.id || 'admin';
-
-    // Task D: Log replay request
-    logger.info('job_replay_requested', {
-      correlationId: originalCorrelationId,
-      replayOfJobId: jobId,
-      requestedBy,
-      jobName: job.name,
-      errorCategory
+    logger.error('failed_jobs_fetch_failed', {
+      errorCategory: 'provider',
+      origin: 'analytics',
+      finality: 'terminal',
+      errorMessage: error.message
     });
-
-    // Task C: Enqueue a new job (NO mutation)
-    const replayContext = {
-      ...job.data.context,
-      replayOfJobId: jobId,
-      replayRequestedAt: new Date().toISOString()
-    };
-
-    // Add optional replayCorrelationId while preserving original
-    replayContext.replayCorrelationId = crypto.randomUUID();
-
-    // Enqueue new job with same retry config
-    const replayJob = await bullmqQueue.enqueue(
-      job.name,
-      job.data.payload,
-      replayContext
-    );
-
-    // Task D: Log successful enqueue
-    logger.info('job_replay_enqueued', {
-      correlationId: originalCorrelationId,
-      replayOfJobId: jobId,
-      replayJobId: replayJob.id,
-      jobName: job.name,
-      replayCorrelationId: replayContext.replayCorrelationId
-    });
-
-    res.json({
-      ok: true,
-      originalJobId: jobId,
-      replayJobId: replayJob.id
-    });
-
-  } catch (error) {
-    console.error('Job replay error:', error);
     res.status(500).json({ error: error.message });
   }
 });

@@ -6,7 +6,10 @@ const DeliveryBoy = require('../models/DeliveryBoy');
 const HeroSection = require('../models/HeroSection');
 const Offer = require('../models/Offer');
 const whatsapp = require('../services/whatsapp');
+const Logger = require('../services/logger');
 const router = express.Router();
+
+const logger = new Logger('public');
 
 // Get active hero sections (public)
 router.get('/hero-sections', async (req, res) => {
@@ -599,7 +602,12 @@ router.post('/whatsapp-item/:itemId', async (req, res) => {
     
     res.json({ success: true, message: 'Item details sent to WhatsApp' });
   } catch (error) {
-    console.error('Error sending item to WhatsApp:', error);
+    logger.error('public_whatsapp_send_failed', {
+      errorCategory: 'provider',
+      origin: 'public',
+      finality: 'retryable',
+      errorMessage: error.message
+    });
     res.status(500).json({ error: error.message });
   }
 });

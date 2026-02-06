@@ -9,7 +9,10 @@ const razorpayService = require('../services/razorpay');
 const chatbotImagesService = require('../services/chatbotImages');
 const authenticate = require('../middleware/authenticate');
 const authorize = require('../middleware/authorize');
+const Logger = require('../services/logger');
 const router = express.Router();
+
+const logger = new Logger('order');
 
 // Helper to get Google Maps navigation URL
 const getGoogleMapsNavigationUrl = async () => {
@@ -20,7 +23,12 @@ const getGoogleMapsNavigationUrl = async () => {
     }
     return null;
   } catch (error) {
-    console.error('Error getting restaurant location:', error);
+    logger.error('restaurant_location_fetch_failed', {
+      errorCategory: 'provider',
+      origin: 'order',
+      finality: 'retryable',
+      errorMessage: error.message
+    });
     return null;
   }
 };
@@ -120,7 +128,12 @@ router.get('/history', authenticate, authorize(['admin']), async (req, res) => {
       page: parseInt(page),
     });
   } catch (error) {
-    console.error('Error fetching order history:', error);
+    logger.error('order_history_fetch_failed', {
+      errorCategory: 'domain',
+      origin: 'order',
+      finality: 'terminal',
+      errorMessage: error.message
+    });
     res.status(500).json({ success: false, error: error.message });
   }
 });
@@ -186,12 +199,10 @@ router.get('/:id', authenticate, authorize(['admin']), async (req, res) => {
 });
 
 router.put('/:id/status', authenticate, authorize(['admin']), async (req, res) => {
-  console.log('🔄 PUT /orders/:id/status called with id:', req.params.id, 'body:', req.body);
   try {
     const { status, message, actualPaymentMethod } = req.body;
     const order = await Order.findById(req.params.id);
     if (!order) return res.status(404).json({ error: 'Order not found' });
-    console.log('📋 Found order:', order.orderId, 'current status:', order.status, 'new status:', status);
 
     const statusLabels = {
       pending: 'Pending', confirmed: 'Confirmed', preparing: 'Preparing', ready: 'Ready',
@@ -209,13 +220,11 @@ router.put('/:id/status', authenticate, authorize(['admin']), async (req, res) =
         status: 'paid', 
         message: `Payment collected via ${actualPaymentMethod === 'cash' ? 'Cash' : 'UPI'} at hotel` 
       });
-      console.log(`💰 Pickup order payment: ${actualPaymentMethod}`);
     }
     
     // Handle actual payment method for delivery COD orders
     if (actualPaymentMethod && order.serviceType === 'delivery' && order.paymentMethod === 'cod') {
       order.actualPaymentMethod = actualPaymentMethod;
-      console.log(`💰 Delivery COD payment: ${actualPaymentMethod}`);
     }
     
     // Track when status changed to delivered/cancelled/refunded for auto-cleanup
@@ -257,7 +266,6 @@ router.put('/:id/status', authenticate, authorize(['admin']), async (req, res) =
           stats.lastUpdated = new Date();
           await stats.save();
           
-          console.log(`📊 Today's revenue updated: +₹${order.totalAmount} (Total: ₹${stats.todayRevenue})`);
           
           // Also update Google Sheets dashboard in real-time
           try {
@@ -265,12 +273,21 @@ router.put('/:id/status', authenticate, authorize(['admin']), async (req, res) =
             await googleSheets.incrementDashboardStat('Today Revenue', order.totalAmount || 0);
             await googleSheets.incrementDashboardStat('Total Orders', 1);
             await googleSheets.incrementDashboardStat('Total Revenue', order.totalAmount || 0);
-            console.log('📊 Google Sheets dashboard updated in real-time');
           } catch (sheetsErr) {
-            console.error('Google Sheets dashboard update error:', sheetsErr.message);
+            logger.error('google_sheets_dashboard_update_failed', {
+              errorCategory: 'provider',
+              origin: 'order',
+              finality: 'retryable',
+              errorMessage: sheetsErr.message
+            });
           }
         } catch (statsErr) {
-          console.error('Error updating today revenue:', statsErr.message);
+          logger.error('revenue_update_failed', {
+            errorCategory: 'domain',
+            origin: 'order',
+            finality: 'retryable',
+            errorMessage: statsErr.message
+          });
         }
       }
     }
@@ -292,16 +309,20 @@ router.put('/:id/status', authenticate, authorize(['admin']), async (req, res) =
             orderId: order.orderId,
             totalAmount: order.totalAmount
           });
-          console.log(`📱 Cancelled notification sent to ${deliveryBoy.name}`);
-        }
+          }
       } catch (pushErr) {
-        console.error('Push notification error for cancelled order:', pushErr.message);
+        logger.error('delivery_partner_cancel_notification_failed', {
+          errorCategory: 'provider',
+          origin: 'order',
+          finality: 'retryable',
+          deliveryBoyName: deliveryBoy.name,
+          errorMessage: pushErr.message
+        });
       }
     }
     
     // For paid UPI orders that are cancelled, mark refund as pending (wait for Razorpay)
     if (status === 'cancelled' && order.paymentStatus === 'paid' && order.razorpayPaymentId) {
-      console.log('💰 Marking refund as pending for order:', order.orderId);
       
       order.refundStatus = 'pending';
       order.refundAmount = order.totalAmount;
@@ -312,28 +333,32 @@ router.put('/:id/status', authenticate, authorize(['admin']), async (req, res) =
         message: `Refund of ₹${order.totalAmount} is being processed`, 
         timestamp: new Date() 
       });
-      console.log('⏳ Refund pending for order:', order.orderId);
     }
     
     try {
       await order.save();
-      console.log('✅ Order saved to DB:', order.orderId, 'status:', order.status, 'paymentStatus:', order.paymentStatus);
     } catch (saveErr) {
-      console.error('❌ Order save error:', saveErr.message);
+      logger.error('order_save_failed', {
+        errorCategory: 'domain',
+        origin: 'order',
+        finality: 'terminal',
+        orderId: order.orderId,
+        errorMessage: saveErr.message
+      });
       return res.status(500).json({ error: 'Failed to save order: ' + saveErr.message });
     }
 
     // Sync status update to Google Sheets
     try {
-      console.log('📊 Syncing to Google Sheets:', order.orderId, order.status, order.paymentStatus);
       const sheetUpdated = await googleSheets.updateOrderStatus(order.orderId, order.status, order.paymentStatus, actualPaymentMethod);
-      if (sheetUpdated) {
-        console.log('✅ Google Sheets synced successfully');
-      } else {
-        console.log('⚠️ Google Sheets update returned false - order may not exist in sheet');
-      }
     } catch (err) {
-      console.error('❌ Google Sheets sync error:', err.message);
+      logger.error('google_sheets_sync_failed', {
+        errorCategory: 'provider',
+        origin: 'order',
+        finality: 'retryable',
+        orderId: order.orderId,
+        errorMessage: err.message
+      });
     }
 
     // Notify customer via WhatsApp (don't fail if notification fails)
@@ -489,7 +514,13 @@ router.put('/:id/status', authenticate, authorize(['admin']), async (req, res) =
                 );
               }
             } catch (callErr) {
-              console.error('Failed to send call button:', callErr.message);
+              logger.error('whatsapp_call_button_failed', {
+                errorCategory: 'provider',
+                origin: 'order',
+                finality: 'retryable',
+                orderId: order.orderId,
+                errorMessage: callErr.message
+              });
             }
           }
         } else if (status === 'preparing') {
@@ -541,7 +572,13 @@ router.put('/:id/status', authenticate, authorize(['admin']), async (req, res) =
           await whatsapp.sendMessage(order.customer.phone, msg);
         }
       } catch (whatsappError) {
-        console.error('WhatsApp notification failed:', whatsappError.message);
+        logger.error('whatsapp_notification_failed', {
+          errorCategory: 'provider',
+          origin: 'order',
+          finality: 'retryable',
+          orderId: order.orderId,
+          errorMessage: whatsappError.message
+        });
       }
     }
 
@@ -550,7 +587,13 @@ router.put('/:id/status', authenticate, authorize(['admin']), async (req, res) =
       try {
         await brevoMail.sendStatusUpdate(order.customer.email, order.orderId, status, statusMessages[status] || '');
       } catch (emailError) {
-        console.error('Email notification failed:', emailError.message);
+        logger.error('email_notification_failed', {
+          errorCategory: 'provider',
+          origin: 'order',
+          finality: 'retryable',
+          orderId: order.orderId,
+          errorMessage: emailError.message
+        });
       }
     }
 
@@ -565,7 +608,14 @@ router.put('/:id/status', authenticate, authorize(['admin']), async (req, res) =
       try {
         // Update customer order history in Google Sheets (non-blocking)
         googleSheets.updateCustomerOrder(order.customer.phone, order, status).catch(err => {
-          console.error('Failed to update customer order in sheets:', err.message);
+          logger.error('customer_order_sheets_update_failed', {
+            errorCategory: 'provider',
+            origin: 'order',
+            finality: 'retryable',
+            customerPhone: order.customer.phone,
+            orderId: order.orderId,
+            errorMessage: err.message
+          });
         });
         
         // Wait a small delay to ensure Google Sheets sync is complete
@@ -574,11 +624,16 @@ router.put('/:id/status', authenticate, authorize(['admin']), async (req, res) =
             { _id: order._id },
             { $set: { isHidden: true } }
           );
-          console.log(`🧹 Order ${order.orderId} hidden from dashboard (status: ${status})`);
           dataEvents.emit('orders');
         }, 3000); // 3 second delay to ensure sheets sync
       } catch (cleanupErr) {
-        console.error('Instant cleanup error:', cleanupErr.message);
+        logger.error('instant_cleanup_failed', {
+          errorCategory: 'domain',
+          origin: 'order',
+          finality: 'retryable',
+          orderId: order.orderId,
+          errorMessage: cleanupErr.message
+        });
       }
     }
 
@@ -630,9 +685,14 @@ router.put('/:id/assign-delivery', authenticate, authorize(['admin']), async (re
     if (deliveryBoy.pushToken) {
       try {
         await pushNotification.sendNewOrderNotification(deliveryBoy.pushToken, orderDetails);
-        console.log(`📱 Push notification sent to ${deliveryBoy.name}`);
       } catch (pushErr) {
-        console.error('Push notification error:', pushErr.message);
+        logger.error('new_order_push_notification_failed', {
+          errorCategory: 'provider',
+          origin: 'order',
+          finality: 'retryable',
+          deliveryBoyName: deliveryBoy.name,
+          errorMessage: pushErr.message
+        });
       }
     }
     
@@ -644,9 +704,14 @@ router.put('/:id/assign-delivery', authenticate, authorize(['admin']), async (re
           deliveryBoy.name,
           orderDetails
         );
-        console.log(`📧 Email notification sent to ${deliveryBoy.email}`);
       } catch (emailErr) {
-        console.error('Email notification error:', emailErr.message);
+        logger.error('delivery_partner_email_notification_failed', {
+          errorCategory: 'provider',
+          origin: 'order',
+          finality: 'retryable',
+          deliveryBoyName: deliveryBoy.name,
+          errorMessage: emailErr.message
+        });
       }
     }
     
@@ -654,7 +719,13 @@ router.put('/:id/assign-delivery', authenticate, authorize(['admin']), async (re
     try {
       await googleSheets.updateDeliveryPartner(order.orderId, deliveryBoy.name);
     } catch (err) {
-      console.error('Google Sheets delivery partner update error:', err.message);
+      logger.error('delivery_partner_sheets_update_failed', {
+        errorCategory: 'provider',
+        origin: 'order',
+        finality: 'retryable',
+        orderId: order.orderId,
+        errorMessage: err.message
+      });
     }
     
     // Emit event for real-time updates
@@ -680,7 +751,13 @@ router.put('/:id/delivery-time', authenticate, authorize(['admin']), async (req,
       await whatsapp.sendMessage(order.customer.phone,
         `⏰ *Delivery Update*\n\nOrder: ${order.orderId}\nEstimated delivery: ${new Date(estimatedDeliveryTime).toLocaleString('en-GB', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' })}`);
     } catch (whatsappError) {
-      console.error('WhatsApp notification failed:', whatsappError.message);
+      logger.error('delivery_time_notification_failed', {
+        errorCategory: 'provider',
+        origin: 'order',
+        finality: 'retryable',
+        orderId: order.orderId,
+        errorMessage: whatsappError.message
+      });
     }
     
     res.json(order);
@@ -721,10 +798,22 @@ router.post('/:orderId/refund/approve', authenticate, authorize(['admin']), asyn
             [{ id: 'place_order', text: 'New Order' }, { id: 'home', text: 'Main Menu' }]
           );
         } catch (e) {
-          console.error('WhatsApp notification failed:', e.message);
+          logger.error('refund_notification_failed', {
+            errorCategory: 'provider',
+            origin: 'order',
+            finality: 'retryable',
+            orderId: order.orderId,
+            errorMessage: e.message
+          });
         }
       } catch (refundError) {
-        console.error('Razorpay refund error:', refundError);
+        logger.error('razorpay_refund_failed', {
+          errorCategory: 'provider',
+          origin: 'order',
+          finality: 'retryable',
+          orderId: order.orderId,
+          errorMessage: refundError.message || refundError.toString()
+        });
         order.refundStatus = 'failed';
         order.status = 'refund_failed';
         order.paymentStatus = 'refund_failed';
@@ -733,7 +822,13 @@ router.post('/:orderId/refund/approve', authenticate, authorize(['admin']), asyn
         
         // Sync to Google Sheets with failed status
         googleSheets.updateOrderStatus(order.orderId, 'refund_failed', 'refund_failed').catch(err => 
-          console.error('Google Sheets sync error:', err)
+          logger.error('refund_failed_sheets_update', {
+            errorCategory: 'provider',
+            origin: 'order',
+            finality: 'retryable',
+            orderId: order.orderId,
+            errorMessage: err.message
+          })
         );
         
         // Emit event for real-time updates
@@ -759,7 +854,13 @@ router.post('/:orderId/refund/approve', authenticate, authorize(['admin']), asyn
           [{ id: 'place_order', text: 'New Order' }, { id: 'home', text: 'Main Menu' }]
         );
       } catch (e) {
-        console.error('WhatsApp notification failed:', e.message);
+        logger.error('whatsapp_notification_failed', {
+          errorCategory: 'provider',
+          origin: 'order',
+          finality: 'retryable',
+          orderId: order.orderId,
+          errorMessage: e.message
+        });
       }
     }
     
@@ -772,7 +873,13 @@ router.post('/:orderId/refund/approve', authenticate, authorize(['admin']), asyn
     
     // Sync to Google Sheets
     googleSheets.updateOrderStatus(order.orderId, order.status, order.paymentStatus).catch(err => 
-      console.error('Google Sheets sync error:', err)
+      logger.error('google_sheets_sync_failed', {
+        errorCategory: 'provider',
+        origin: 'google_sheets',
+        finality: 'retryable',
+        orderId: order.orderId,
+        errorMessage: err.message
+      })
     );
     
     res.json({ success: true, order });
@@ -808,7 +915,13 @@ router.post('/:orderId/refund/reject', authenticate, authorize(['admin']), async
         [{ id: 'place_order', text: 'New Order' }, { id: 'home', text: 'Main Menu' }]
       );
     } catch (e) {
-      console.error('WhatsApp notification failed:', e.message);
+      logger.error('whatsapp_notification_failed', {
+        errorCategory: 'provider',
+        origin: 'order',
+        finality: 'retryable',
+        orderId: order.orderId,
+        errorMessage: e.message
+      });
     }
     
     res.json({ success: true, order });

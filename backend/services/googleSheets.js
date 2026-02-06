@@ -1,8 +1,11 @@
 const { google } = require('googleapis');
+const Logger = require('./logger');
 
 // Google Sheets configuration
 const SPREADSHEET_ID = process.env.GOOGLE_SHEET_ID;
 const SHEET_NAME = process.env.GOOGLE_SHEET_NAME || 'Sheet1';
+
+const logger = new Logger('googleSheets');
 
 // Sheet names for different order statuses
 const SHEET_NAMES = {
@@ -50,7 +53,17 @@ const getAuthClient = () => {
   try {
     const keyData = process.env.GOOGLE_SERVICE_ACCOUNT_KEY;
     if (!keyData) {
-      console.error('❌ GOOGLE_SERVICE_ACCOUNT_KEY not set');
+      const dataEvents = require('./eventEmitter');
+      dataEvents.emit('error', {
+        component: 'googleSheets',
+        event: 'service_account_key_missing',
+        context: {
+          errorCategory: 'validation',
+          origin: 'domain',
+          finality: 'terminal',
+          details: 'GOOGLE_SERVICE_ACCOUNT_KEY environment variable not set'
+        }
+      });
       return null;
     }
     const credentials = JSON.parse(keyData);
@@ -59,7 +72,17 @@ const getAuthClient = () => {
       scopes: ['https://www.googleapis.com/auth/spreadsheets']
     });
   } catch (error) {
-    console.error('❌ Error parsing Google credentials:', error.message);
+    const dataEvents = require('./eventEmitter');
+    dataEvents.emit('error', {
+      component: 'googleSheets',
+      event: 'google_credentials_parse_failed',
+      context: {
+        errorCategory: 'validation',
+        origin: 'domain',
+        finality: 'terminal',
+        errorMessage: error.message
+      }
+    });
     return null;
   }
 };
@@ -78,7 +101,17 @@ const googleSheets = {
       
       return sheet ? { sheetId: sheet.properties.sheetId, sheetName: sheet.properties.title } : null;
     } catch (error) {
-      console.error('Error getting sheet:', error.message);
+      const dataEvents = require('./eventEmitter');
+      dataEvents.emit('error', {
+        component: 'googleSheets',
+        event: 'sheet_retrieval_failed',
+        context: {
+          errorCategory: 'provider',
+          origin: 'domain',
+          finality: 'retryable',
+          errorMessage: error.message
+        }
+      });
       return null;
     }
   },
@@ -96,7 +129,18 @@ const googleSheets = {
       
       return rowIndex === -1 ? null : { rowIndex, rowData: rows[rowIndex] };
     } catch (error) {
-      console.error(`Error finding order in ${sheetName}:`, error.message);
+      const dataEvents = require('./eventEmitter');
+      dataEvents.emit('error', {
+        component: 'googleSheets',
+        event: 'order_search_failed',
+        context: {
+          errorCategory: 'provider',
+          origin: 'domain',
+          finality: 'retryable',
+          errorMessage: error.message,
+          sheetName
+        }
+      });
       return null;
     }
   },
@@ -165,7 +209,17 @@ const googleSheets = {
         });
       }
     } catch (error) {
-      console.error('Error adding date header:', error.message);
+      const dataEvents = require('./eventEmitter');
+      dataEvents.emit('error', {
+        component: 'googleSheets',
+        event: 'date_header_add_failed',
+        context: {
+          errorCategory: 'provider',
+          origin: 'domain',
+          finality: 'retryable',
+          errorMessage: error.message
+        }
+      });
     }
   },
 
@@ -191,7 +245,17 @@ const googleSheets = {
         }
       });
     } catch (error) {
-      console.error('Error updating row color:', error.message);
+      const dataEvents = require('./eventEmitter');
+      dataEvents.emit('error', {
+        component: 'googleSheets',
+        event: 'row_color_update_failed',
+        context: {
+          errorCategory: 'provider',
+          origin: 'domain',
+          finality: 'retryable',
+          errorMessage: error.message
+        }
+      });
     }
   },
 
@@ -206,7 +270,6 @@ const googleSheets = {
       // Check if order already exists in this sheet
       const existingOrder = await this.findOrderInSheet(sheets, sheet.sheetName, orderId);
       if (existingOrder) {
-        console.log(`⏭️ Order ${orderId} already exists in ${sheet.sheetName}, skipping add`);
         return true; // Return true since order is already there
       }
 
@@ -274,10 +337,20 @@ const googleSheets = {
         await this.updateRowColor(sheets, sheet.sheetId, newRowIndex, colorStatus);
       }
 
-      console.log(`✅ Order added to ${sheet.sheetName}:`, newRowData[0]);
       return true;
     } catch (error) {
-      console.error(`Error adding order to ${sheetType}:`, error.message);
+      const dataEvents = require('./eventEmitter');
+      dataEvents.emit('error', {
+        component: 'googleSheets',
+        event: 'order_add_failed',
+        context: {
+          errorCategory: 'provider',
+          origin: 'domain',
+          finality: 'retryable',
+          errorMessage: error.message,
+          sheetType
+        }
+      });
       return false;
     }
   },
@@ -297,7 +370,17 @@ const googleSheets = {
       });
       return true;
     } catch (error) {
-      console.error('Error deleting row:', error.message);
+      const dataEvents = require('./eventEmitter');
+      dataEvents.emit('error', {
+        component: 'googleSheets',
+        event: 'row_delete_failed',
+        context: {
+          errorCategory: 'provider',
+          origin: 'domain',
+          finality: 'retryable',
+          errorMessage: error.message
+        }
+      });
       return false;
     }
   },
@@ -380,10 +463,19 @@ const googleSheets = {
         }
       }
 
-      console.log(`✅ Order added to Google Sheet (${sheet.sheetName}):`, order.orderId);
       return true;
     } catch (error) {
-      console.error('❌ Google Sheets add order error:', error.message);
+      const dataEvents = require('./eventEmitter');
+      dataEvents.emit('error', {
+        component: 'googleSheets',
+        event: 'order_add_main_failed',
+        context: {
+          errorCategory: 'provider',
+          origin: 'domain',
+          finality: 'retryable',
+          errorMessage: error.message
+        }
+      });
       return false;
     }
   },
@@ -391,7 +483,6 @@ const googleSheets = {
   // Main function to update order status
   async updateOrderStatus(orderId, status, paymentStatus = null, actualPaymentMethod = null) {
     try {
-      console.log('📊 updateOrderStatus:', { orderId, status, paymentStatus, actualPaymentMethod });
       
       const auth = getAuthClient();
       if (!auth) return false;
@@ -405,7 +496,6 @@ const googleSheets = {
         
         const orderData = await this.findOrderInSheet(sheets, newSheet.sheetName, orderId);
         if (!orderData) {
-          console.log('❌ Order not found in neworders sheet');
           return false;
         }
 
@@ -447,7 +537,6 @@ const googleSheets = {
         
         if (isPickupOrder) {
           // Pickup orders go to selfpick sheet when completed
-          console.log('📦 Moving completed pickup order to selfpick sheet:', orderId, 'Method:', finalPaymentMethod, 'Status:', finalPaymentStatus);
           await this.addOrderToSheet(sheets, 'selfpick', orderData.rowData, finalPaymentStatus, 'picked_up', 'picked_up');
         } else {
           // Delivery orders go to delivered sheet
@@ -458,7 +547,6 @@ const googleSheets = {
           } else if (isPrepaidOnline) {
             finalPaymentStatus = 'Paid';
           }
-          console.log('🚚 Moving completed delivery order to delivered sheet:', orderId, 'Status:', finalPaymentStatus);
           await this.addOrderToSheet(sheets, 'delivered', orderData.rowData, finalPaymentStatus, 'delivered', 'delivered');
         }
         
@@ -477,7 +565,6 @@ const googleSheets = {
         }
         
         if (!orderData) {
-          console.log('⚠️ Order not found in neworders sheet, trying to fetch from database...');
           // Try to get order data from database
           try {
             const Order = require('../models/Order');
@@ -513,15 +600,23 @@ const googleSheets = {
                 ],
                 rowIndex: -1
               };
-              console.log('✅ Created order data from database for:', orderId);
             }
           } catch (dbErr) {
-            console.error('Error fetching order from database:', dbErr.message);
+            const dataEvents = require('./eventEmitter');
+            dataEvents.emit('error', {
+              component: 'googleSheets',
+              event: 'database_order_fetch_failed',
+              context: {
+                errorCategory: 'provider',
+                origin: 'domain',
+                finality: 'retryable',
+                errorMessage: dbErr.message
+              }
+            });
           }
         }
         
         if (!orderData) {
-          console.log('❌ Order not found in neworders sheet or database');
           return false;
         }
 
@@ -544,7 +639,6 @@ const googleSheets = {
       
       const orderData = await this.findOrderInSheet(sheets, newSheet.sheetName, orderId);
       if (!orderData) {
-        console.log('❌ Order not found in neworders sheet');
         return false;
       }
 
@@ -568,10 +662,19 @@ const googleSheets = {
       }
       await this.updateRowColor(sheets, newSheet.sheetId, orderData.rowIndex, status);
       
-      console.log('✅ Order status updated:', orderId, status);
       return true;
     } catch (error) {
-      console.error('❌ Google Sheets update error:', error.message);
+      const dataEvents = require('./eventEmitter');
+      dataEvents.emit('error', {
+        component: 'googleSheets',
+        event: 'order_status_update_failed',
+        context: {
+          errorCategory: 'provider',
+          origin: 'domain',
+          finality: 'retryable',
+          errorMessage: error.message
+        }
+      });
       return false;
     }
   },
@@ -598,7 +701,17 @@ const googleSheets = {
       }
       return true;
     } catch (error) {
-      console.error('❌ Google Sheets init error:', error.message);
+      const dataEvents = require('./eventEmitter');
+      dataEvents.emit('error', {
+        component: 'googleSheets',
+        event: 'sheet_initialization_failed',
+        context: {
+          errorCategory: 'provider',
+          origin: 'domain',
+          finality: 'retryable',
+          errorMessage: error.message
+        }
+      });
       return false;
     }
   },
@@ -615,7 +728,6 @@ const googleSheets = {
       
       const orderData = await this.findOrderInSheet(sheets, newSheet.sheetName, orderId);
       if (!orderData) {
-        console.log('❌ Order not found in neworders sheet for delivery partner update');
         return false;
       }
       
@@ -629,10 +741,19 @@ const googleSheets = {
         resource: { values: [[deliveryPartnerName]] }
       });
       
-      console.log('✅ Delivery partner updated in Google Sheet:', orderId, deliveryPartnerName);
       return true;
     } catch (error) {
-      console.error('❌ Google Sheets delivery partner update error:', error.message);
+      const dataEvents = require('./eventEmitter');
+      dataEvents.emit('error', {
+        component: 'googleSheets',
+        event: 'delivery_partner_update_failed',
+        context: {
+          errorCategory: 'provider',
+          origin: 'domain',
+          finality: 'retryable',
+          errorMessage: error.message
+        }
+      });
       return false;
     }
   },
@@ -662,7 +783,6 @@ const googleSheets = {
       }
       
       if (!orderData) {
-        console.log('❌ Order not found in neworders or selfpick sheet for actual payment method update');
         return false;
       }
       
@@ -684,10 +804,19 @@ const googleSheets = {
         resource: { values: [[paymentStatusLabel]] }
       });
       
-      console.log('✅ Actual payment method updated in Google Sheet:', orderId, paymentLabel);
       return true;
     } catch (error) {
-      console.error('❌ Google Sheets actual payment method update error:', error.message);
+      const dataEvents = require('./eventEmitter');
+      dataEvents.emit('error', {
+        component: 'googleSheets',
+        event: 'actual_payment_method_update_failed',
+        context: {
+          errorCategory: 'provider',
+          origin: 'domain',
+          finality: 'retryable',
+          errorMessage: error.message
+        }
+      });
       return false;
     }
   },
@@ -725,7 +854,6 @@ const googleSheets = {
       }
       
       if (!orderData) {
-        console.log('❌ Order not found for payment method update');
         return false;
       }
       
@@ -739,10 +867,19 @@ const googleSheets = {
         resource: { values: [[paymentMethodLabel]] }
       });
       
-      console.log('✅ Payment method updated in Google Sheet:', orderId, paymentMethodLabel);
       return true;
     } catch (error) {
-      console.error('❌ Google Sheets payment method update error:', error.message);
+      const dataEvents = require('./eventEmitter');
+      dataEvents.emit('error', {
+        component: 'googleSheets',
+        event: 'payment_method_update_failed',
+        context: {
+          errorCategory: 'provider',
+          origin: 'domain',
+          finality: 'retryable',
+          errorMessage: error.message
+        }
+      });
       return false;
     }
   },
@@ -803,7 +940,7 @@ const googleSheets = {
                   currentDate = new Date(parseInt(year), month, parseInt(day));
                 }
               } catch (e) {
-                console.log('Failed to parse date header:', dateText);
+                // Date parsing failed, continue
               }
               continue;
             }
@@ -861,7 +998,18 @@ const googleSheets = {
             allOrders.push(order);
           }
         } catch (sheetError) {
-          console.error(`Error fetching from ${sheet.sheetName}:`, sheetError.message);
+          const dataEvents = require('./eventEmitter');
+          dataEvents.emit('error', {
+            component: 'googleSheets',
+            event: 'sheet_fetch_failed',
+            context: {
+              errorCategory: 'provider',
+              origin: 'domain',
+              finality: 'retryable',
+              errorMessage: sheetError.message,
+              sheetName: sheet.sheetName
+            }
+          });
         }
       }
       
@@ -896,10 +1044,19 @@ const googleSheets = {
         return parseTime(b.time) - parseTime(a.time);
       });
       
-      console.log(`📊 Fetched ${allOrders.length} orders from Google Sheets history (sorted by time)`);
       return { orders: allOrders, error: null };
     } catch (error) {
-      console.error('❌ Error fetching order history from sheets:', error.message);
+      const dataEvents = require('./eventEmitter');
+      dataEvents.emit('error', {
+        component: 'googleSheets',
+        event: 'order_history_fetch_failed',
+        context: {
+          errorCategory: 'provider',
+          origin: 'domain',
+          finality: 'retryable',
+          errorMessage: error.message
+        }
+      });
       return { orders: [], error: error.message };
     }
   },
@@ -996,7 +1153,18 @@ const googleSheets = {
             allOrders.push(order);
           }
         } catch (sheetError) {
-          console.error(`Error fetching from ${sheetType}:`, sheetError.message);
+          const dataEvents = require('./eventEmitter');
+          dataEvents.emit('error', {
+            component: 'googleSheets',
+            event: 'delivery_partner_sheet_fetch_failed',
+            context: {
+              errorCategory: 'provider',
+              origin: 'domain',
+              finality: 'retryable',
+              errorMessage: sheetError.message,
+              sheetType
+            }
+          });
         }
       }
       
@@ -1039,8 +1207,6 @@ const googleSheets = {
       const cancelledOrders = filteredOrders.filter(o => o.status === 'cancelled');
       const totalEarnings = deliveredOrders.reduce((sum, o) => sum + (o.totalAmount || 0), 0);
       
-      console.log(`📊 Fetched ${filteredOrders.length} orders for delivery partner "${deliveryBoyName}" (filter: ${filter})`);
-      
       return { 
         orders: filteredOrders, 
         stats: {
@@ -1051,7 +1217,17 @@ const googleSheets = {
         error: null 
       };
     } catch (error) {
-      console.error('❌ Error fetching delivery partner history from sheets:', error.message);
+      const dataEvents = require('./eventEmitter');
+      dataEvents.emit('error', {
+        component: 'googleSheets',
+        event: 'delivery_partner_history_fetch_failed',
+        context: {
+          errorCategory: 'provider',
+          origin: 'domain',
+          finality: 'retryable',
+          errorMessage: error.message
+        }
+      });
       return { orders: [], stats: { delivered: 0, cancelled: 0, earnings: 0 }, error: error.message };
     }
   },
@@ -1067,7 +1243,6 @@ const googleSheets = {
       const sheet = await this.getSheetByType(sheets, 'customers');
       
       if (!sheet) {
-        console.log('⚠️ Customers sheet not found. Please create a sheet named "customers" in your Google Spreadsheet');
         return false;
       }
       
@@ -1107,12 +1282,21 @@ const googleSheets = {
           }
         });
         
-        console.log('✅ Customers sheet initialized with headers');
       }
       
       return true;
     } catch (error) {
-      console.error('❌ Error initializing customers sheet:', error.message);
+      const dataEvents = require('./eventEmitter');
+      dataEvents.emit('error', {
+        component: 'googleSheets',
+        event: 'customers_sheet_init_failed',
+        context: {
+          errorCategory: 'provider',
+          origin: 'domain',
+          finality: 'retryable',
+          errorMessage: error.message
+        }
+      });
       return false;
     }
   },
@@ -1127,7 +1311,6 @@ const googleSheets = {
       const sheet = await this.getSheetByType(sheets, 'customers');
       
       if (!sheet) {
-        console.log('⚠️ Customers sheet not found');
         return false;
       }
       
@@ -1166,7 +1349,6 @@ const googleSheets = {
           });
         }
         
-        console.log(`📱 Customer ${phone} already exists, updated info`);
         return true;
       }
       
@@ -1183,10 +1365,19 @@ const googleSheets = {
       // Update Total Customers in dashboard_stats
       await this.incrementDashboardStat('Total Customers', 1);
       
-      console.log(`✅ Customer ${phone} added to Google Sheets`);
       return true;
     } catch (error) {
-      console.error('❌ Error adding customer to sheets:', error.message);
+      const dataEvents = require('./eventEmitter');
+      dataEvents.emit('error', {
+        component: 'googleSheets',
+        event: 'customer_add_failed',
+        context: {
+          errorCategory: 'provider',
+          origin: 'domain',
+          finality: 'retryable',
+          errorMessage: error.message
+        }
+      });
       return false;
     }
   },
@@ -1268,10 +1459,19 @@ const googleSheets = {
         }
       });
       
-      console.log(`✅ Customer ${phone} order history updated in Google Sheets`);
       return true;
     } catch (error) {
-      console.error('❌ Error updating customer order in sheets:', error.message);
+      const dataEvents = require('./eventEmitter');
+      dataEvents.emit('error', {
+        component: 'googleSheets',
+        event: 'customer_order_update_failed',
+        context: {
+          errorCategory: 'provider',
+          origin: 'domain',
+          finality: 'retryable',
+          errorMessage: error.message
+        }
+      });
       return false;
     }
   },
@@ -1314,10 +1514,28 @@ const googleSheets = {
         });
       }
       
-      console.log(`📊 Fetched ${customers.length} customers from Google Sheets`);
+      const dataEvents = require('./eventEmitter');
+      dataEvents.emit('info', {
+        component: 'googleSheets',
+        event: 'customers_fetched',
+        context: {
+          customersCount: customers.length
+        }
+      });
+      
       return { customers, error: null };
     } catch (error) {
-      console.error('❌ Error fetching customers from sheets:', error.message);
+      const dataEvents = require('./eventEmitter');
+      dataEvents.emit('error', {
+        component: 'googleSheets',
+        event: 'customers_fetch_failed',
+        context: {
+          errorCategory: 'provider',
+          origin: 'domain',
+          finality: 'retryable',
+          errorMessage: error.message
+        }
+      });
       return { customers: [], error: error.message };
     }
   },
@@ -1347,7 +1565,6 @@ const googleSheets = {
       // Get top customers
       const topCustomers = orderedCustomers.slice(0, topCount);
       
-      console.log(`📊 Top ${percentage}% customers: ${topCustomers.length} out of ${orderedCustomers.length}`);
       return { 
         customers: topCustomers, 
         totalCustomers: orderedCustomers.length,
@@ -1355,7 +1572,17 @@ const googleSheets = {
         error: null 
       };
     } catch (error) {
-      console.error('❌ Error getting top customers:', error.message);
+      const dataEvents = require('./eventEmitter');
+      dataEvents.emit('error', {
+        component: 'googleSheets',
+        event: 'top_customers_fetch_failed',
+        context: {
+          errorCategory: 'provider',
+          origin: 'domain',
+          finality: 'retryable',
+          errorMessage: error.message
+        }
+      });
       return { customers: [], error: error.message };
     }
   },
@@ -1426,22 +1653,40 @@ const googleSheets = {
               totalRemoved++;
             }
             
-            console.log(`🗑️ Removed ${rowsToDelete.length} empty date headers from ${sheet.sheetName}`);
+            // Removed console.log for cleanup operation
+            
           }
         } catch (sheetError) {
-          console.error(`Error cleaning ${sheet.sheetName}:`, sheetError.message);
+          const dataEvents = require('./eventEmitter');
+          dataEvents.emit('error', {
+            component: 'googleSheets',
+            event: 'sheet_cleanup_failed',
+            context: {
+              errorCategory: 'provider',
+              origin: 'domain',
+              finality: 'retryable',
+              errorMessage: sheetError.message,
+              sheetName: sheet.sheetName
+            }
+          });
         }
       }
       
-      if (totalRemoved > 0) {
-        console.log(`✅ Total empty date headers removed: ${totalRemoved}`);
-      } else {
-        console.log('📅 No empty date headers to remove');
-      }
+      // Removed console.log for cleanup summary
       
       return true;
     } catch (error) {
-      console.error('❌ Error cleaning up empty date headers:', error.message);
+      const dataEvents = require('./eventEmitter');
+      dataEvents.emit('error', {
+        component: 'googleSheets',
+        event: 'date_headers_cleanup_failed',
+        context: {
+          errorCategory: 'provider',
+          origin: 'domain',
+          finality: 'retryable',
+          errorMessage: error.message
+        }
+      });
       return false;
     }
   },
@@ -1459,7 +1704,6 @@ const googleSheets = {
       const sheet = await this.getSheetByType(sheets, 'whatsapp_contacts');
       
       if (!sheet) {
-        console.log('⚠️ whatsapp_contacts sheet not found. Please create it in your Google Spreadsheet');
         return false;
       }
       
@@ -1497,12 +1741,22 @@ const googleSheets = {
             }]
           }
         });
-        console.log('✅ WhatsApp contacts sheet initialized with headers');
+        
       }
       
       return true;
     } catch (error) {
-      console.error('❌ Error initializing whatsapp_contacts sheet:', error.message);
+      const dataEvents = require('./eventEmitter');
+      dataEvents.emit('error', {
+        component: 'googleSheets',
+        event: 'whatsapp_contacts_init_failed',
+        context: {
+          errorCategory: 'provider',
+          origin: 'domain',
+          finality: 'retryable',
+          errorMessage: error.message
+        }
+      });
       return false;
     }
   },
@@ -1566,7 +1820,17 @@ const googleSheets = {
       
       return true;
     } catch (error) {
-      console.error('❌ Error adding/updating WhatsApp contact in sheet:', error.message);
+      const dataEvents = require('./eventEmitter');
+      dataEvents.emit('error', {
+        component: 'googleSheets',
+        event: 'whatsapp_contact_add_failed',
+        context: {
+          errorCategory: 'provider',
+          origin: 'domain',
+          finality: 'retryable',
+          errorMessage: error.message
+        }
+      });
       return false;
     }
   },
@@ -1604,10 +1868,19 @@ const googleSheets = {
         }
       }
       
-      console.log(`📱 Fetched ${contacts.length} WhatsApp contacts from sheet`);
       return contacts;
     } catch (error) {
-      console.error('❌ Error fetching WhatsApp contacts from sheet:', error.message);
+      const dataEvents = require('./eventEmitter');
+      dataEvents.emit('error', {
+        component: 'googleSheets',
+        event: 'whatsapp_contacts_fetch_failed',
+        context: {
+          errorCategory: 'provider',
+          origin: 'domain',
+          finality: 'retryable',
+          errorMessage: error.message
+        }
+      });
       return [];
     }
   },
@@ -1631,7 +1904,6 @@ const googleSheets = {
       const sheet = await this.getSheetByType(sheets, 'daily_reports');
       
       if (!sheet) {
-        console.log('⚠️ daily_reports sheet not found. Please create it in your Google Spreadsheet');
         return false;
       }
       
@@ -1669,12 +1941,22 @@ const googleSheets = {
             }]
           }
         });
-        console.log('✅ Daily reports sheet initialized with headers');
+        
       }
       
       return true;
     } catch (error) {
-      console.error('❌ Error initializing daily_reports sheet:', error.message);
+      const dataEvents = require('./eventEmitter');
+      dataEvents.emit('error', {
+        component: 'googleSheets',
+        event: 'daily_reports_init_failed',
+        context: {
+          errorCategory: 'provider',
+          origin: 'domain',
+          finality: 'retryable',
+          errorMessage: error.message
+        }
+      });
       return false;
     }
   },
@@ -1760,10 +2042,19 @@ const googleSheets = {
         });
       }
       
-      console.log(`📊 Daily report saved for ${date}`);
       return true;
     } catch (error) {
-      console.error('❌ Error saving daily report to sheet:', error.message);
+      const dataEvents = require('./eventEmitter');
+      dataEvents.emit('error', {
+        component: 'googleSheets',
+        event: 'daily_report_save_failed',
+        context: {
+          errorCategory: 'provider',
+          origin: 'domain',
+          finality: 'retryable',
+          errorMessage: error.message
+        }
+      });
       return false;
     }
   },
@@ -1803,7 +2094,17 @@ const googleSheets = {
       
       return null;
     } catch (error) {
-      console.error('❌ Error fetching daily report from sheet:', error.message);
+      const dataEvents = require('./eventEmitter');
+      dataEvents.emit('error', {
+        component: 'googleSheets',
+        event: 'daily_report_fetch_failed',
+        context: {
+          errorCategory: 'provider',
+          origin: 'domain',
+          finality: 'retryable',
+          errorMessage: error.message
+        }
+      });
       return null;
     }
   },
@@ -1848,7 +2149,17 @@ const googleSheets = {
       
       return reports;
     } catch (error) {
-      console.error('❌ Error fetching reports in range from sheet:', error.message);
+      const dataEvents = require('./eventEmitter');
+      dataEvents.emit('error', {
+        component: 'googleSheets',
+        event: 'reports_range_fetch_failed',
+        context: {
+          errorCategory: 'provider',
+          origin: 'domain',
+          finality: 'retryable',
+          errorMessage: error.message
+        }
+      });
       return [];
     }
   },
@@ -1866,7 +2177,6 @@ const googleSheets = {
       const sheet = await this.getSheetByType(sheets, 'dashboard_stats');
       
       if (!sheet) {
-        console.log('⚠️ dashboard_stats sheet not found. Please create it in your Google Spreadsheet');
         return false;
       }
       
@@ -1921,12 +2231,22 @@ const googleSheets = {
             }]
           }
         });
-        console.log('✅ Dashboard stats sheet initialized with headers');
+        
       }
       
       return true;
     } catch (error) {
-      console.error('❌ Error initializing dashboard_stats sheet:', error.message);
+      const dataEvents = require('./eventEmitter');
+      dataEvents.emit('error', {
+        component: 'googleSheets',
+        event: 'dashboard_stats_init_failed',
+        context: {
+          errorCategory: 'provider',
+          origin: 'domain',
+          finality: 'retryable',
+          errorMessage: error.message
+        }
+      });
       return false;
     }
   },
@@ -1980,7 +2300,17 @@ const googleSheets = {
       
       return true;
     } catch (error) {
-      console.error('❌ Error updating dashboard stat in sheet:', error.message);
+      const dataEvents = require('./eventEmitter');
+      dataEvents.emit('error', {
+        component: 'googleSheets',
+        event: 'dashboard_stat_update_failed',
+        context: {
+          errorCategory: 'provider',
+          origin: 'domain',
+          finality: 'retryable',
+          errorMessage: error.message
+        }
+      });
       return false;
     }
   },
@@ -2014,7 +2344,17 @@ const googleSheets = {
       
       return stats;
     } catch (error) {
-      console.error('❌ Error fetching dashboard stats from sheet:', error.message);
+      const dataEvents = require('./eventEmitter');
+      dataEvents.emit('error', {
+        component: 'googleSheets',
+        event: 'dashboard_stats_fetch_failed',
+        context: {
+          errorCategory: 'provider',
+          origin: 'domain',
+          finality: 'retryable',
+          errorMessage: error.message
+        }
+      });
       return {};
     }
   },
@@ -2027,7 +2367,17 @@ const googleSheets = {
       await this.updateDashboardStat(metric, currentValue + amount);
       return true;
     } catch (error) {
-      console.error('❌ Error incrementing dashboard stat:', error.message);
+      const dataEvents = require('./eventEmitter');
+      dataEvents.emit('error', {
+        component: 'googleSheets',
+        event: 'dashboard_stat_increment_failed',
+        context: {
+          errorCategory: 'provider',
+          origin: 'domain',
+          finality: 'retryable',
+          errorMessage: error.message
+        }
+      });
       return false;
     }
   },
@@ -2148,10 +2498,19 @@ const googleSheets = {
         }
       }
       
-      console.log('🧹 Order sheets cleared:', results);
       return { success: true, results };
     } catch (error) {
-      console.error('❌ Error clearing order sheets:', error.message);
+      const dataEvents = require('./eventEmitter');
+      dataEvents.emit('error', {
+        component: 'googleSheets',
+        event: 'order_sheets_clear_failed',
+        context: {
+          errorCategory: 'provider',
+          origin: 'domain',
+          finality: 'retryable',
+          errorMessage: error.message
+        }
+      });
       return { success: false, error: error.message };
     }
   },
@@ -2226,10 +2585,19 @@ const googleSheets = {
         }
       });
       
-      console.log(`🧹 Customers sheet cleared: ${rowCount - 1} rows removed`);
       return { success: true, clearedRows: rowCount - 1 };
     } catch (error) {
-      console.error('❌ Error clearing customers sheet:', error.message);
+      const dataEvents = require('./eventEmitter');
+      dataEvents.emit('error', {
+        component: 'googleSheets',
+        event: 'customers_sheet_clear_failed',
+        context: {
+          errorCategory: 'provider',
+          origin: 'domain',
+          finality: 'retryable',
+          errorMessage: error.message
+        }
+      });
       return { success: false, error: error.message };
     }
   },
@@ -2304,10 +2672,19 @@ const googleSheets = {
         }
       });
       
-      console.log(`🧹 WhatsApp contacts sheet cleared: ${rowCount - 1} rows removed`);
       return { success: true, clearedRows: rowCount - 1 };
     } catch (error) {
-      console.error('❌ Error clearing whatsapp_contacts sheet:', error.message);
+      const dataEvents = require('./eventEmitter');
+      dataEvents.emit('error', {
+        component: 'googleSheets',
+        event: 'whatsapp_contacts_sheet_clear_failed',
+        context: {
+          errorCategory: 'provider',
+          origin: 'domain',
+          finality: 'retryable',
+          errorMessage: error.message
+        }
+      });
       return { success: false, error: error.message };
     }
   },
@@ -2417,10 +2794,19 @@ const googleSheets = {
         }
       });
       
-      console.log('🧹 Daily reports sheet cleared and reformatted (dates as columns)');
       return { success: true, message: 'Sheet reset with new date-column format' };
     } catch (error) {
-      console.error('❌ Error clearing daily_reports sheet:', error.message);
+      const dataEvents = require('./eventEmitter');
+      dataEvents.emit('error', {
+        component: 'googleSheets',
+        event: 'daily_reports_sheet_clear_failed',
+        context: {
+          errorCategory: 'provider',
+          origin: 'domain',
+          finality: 'retryable',
+          errorMessage: error.message
+        }
+      });
       return { success: false, error: error.message };
     }
   },
@@ -2546,18 +2932,25 @@ const googleSheets = {
         }
       });
       
-      console.log('🧹 Dashboard stats sheet cleared and reset');
       return { success: true, message: 'Sheet reset with default metrics' };
     } catch (error) {
-      console.error('❌ Error clearing dashboard_stats sheet:', error.message);
+      const dataEvents = require('./eventEmitter');
+      dataEvents.emit('error', {
+        component: 'googleSheets',
+        event: 'dashboard_stats_sheet_clear_failed',
+        context: {
+          errorCategory: 'provider',
+          origin: 'domain',
+          finality: 'retryable',
+          errorMessage: error.message
+        }
+      });
       return { success: false, error: error.message };
     }
   },
 
   // Clear all sheets at once
   async clearAllSheets() {
-    console.log('\n🧹 Clearing all Google Sheets data...\n');
-    
     const results = {
       orders: await this.clearAllOrderSheets(),
       customers: await this.clearCustomersSheet(),
@@ -2566,7 +2959,6 @@ const googleSheets = {
       dashboardStats: await this.clearDashboardStatsSheet()
     };
     
-    console.log('\n✅ All sheets cleared!\n');
     return results;
   },
 
@@ -2696,10 +3088,19 @@ const googleSheets = {
         }
       });
       
-      console.log(`📊 Daily report saved for ${date} in column ${columnLetter}`);
       return true;
     } catch (error) {
-      console.error('❌ Error saving daily report by date:', error.message);
+      const dataEvents = require('./eventEmitter');
+      dataEvents.emit('error', {
+        component: 'googleSheets',
+        event: 'daily_report_by_date_save_failed',
+        context: {
+          errorCategory: 'provider',
+          origin: 'domain',
+          finality: 'retryable',
+          errorMessage: error.message
+        }
+      });
       return false;
     }
   },
@@ -2750,7 +3151,17 @@ const googleSheets = {
       
       return reports;
     } catch (error) {
-      console.error('❌ Error fetching all daily reports:', error.message);
+      const dataEvents = require('./eventEmitter');
+      dataEvents.emit('error', {
+        component: 'googleSheets',
+        event: 'all_daily_reports_fetch_failed',
+        context: {
+          errorCategory: 'provider',
+          origin: 'domain',
+          finality: 'retryable',
+          errorMessage: error.message
+        }
+      });
       return [];
     }
   },

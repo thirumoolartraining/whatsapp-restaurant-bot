@@ -3,6 +3,9 @@
 
 const axios = require('axios');
 const messageProcessor = require('./messageProcessor');
+const Logger = require('./logger');
+
+const logger = new Logger('polling');
 
 let isPolling = false;
 let pollInterval = null;
@@ -23,7 +26,12 @@ const polling = {
       return response.data;
     } catch (error) {
       if (error.code !== 'ECONNABORTED') {
-        console.error('Polling error:', error.message);
+        logger.error('polling_error', {
+          errorCategory: 'provider',
+          origin: 'polling',
+          finality: 'retryable',
+          errorMessage: error.message
+        });
       }
       return null;
     }
@@ -34,7 +42,13 @@ const polling = {
       const { baseUrl, token } = getConfig();
       await axios.delete(`${baseUrl}/deleteNotification/${token}/${receiptId}`);
     } catch (error) {
-      console.error('Delete notification error:', error.message);
+      logger.error('delete_notification_failed', {
+        errorCategory: 'provider',
+        origin: 'polling',
+        finality: 'retryable',
+        receiptId,
+        errorMessage: error.message
+      });
     }
   },
 
@@ -64,7 +78,6 @@ const polling = {
       }
 
       if (phone && (message || selectedId)) {
-        console.log('📱 Processing message:', { phone, message, messageType, selectedId });
         await messageProcessor.processInboundMessage({
           provider: 'meta',
           payload: {
@@ -76,7 +89,13 @@ const polling = {
           },
           reqId: `poll_${Date.now()}_${phone}`
         });
-        console.log('✅ Message handled');
+        logger.info('polling_message_handled', {
+          level: 'info',
+          component: 'polling',
+          event: 'polling_message_handled',
+          timestamp: new Date().toISOString(),
+          context: { phone }
+        });
       }
     }
   },
@@ -89,25 +108,48 @@ const polling = {
       const notification = await this.receiveNotification();
       
       if (notification && notification.receiptId) {
-        console.log('📩 Received notification:', notification.body?.typeWebhook);
+        logger.info('notification_received', {
+          level: 'info',
+          component: 'polling',
+          event: 'notification_received',
+          timestamp: new Date().toISOString(),
+          context: { type: notification.body?.typeWebhook }
+        });
         await this.processNotification(notification);
         await this.deleteNotification(notification.receiptId);
       }
     } catch (error) {
-      console.error('Poll cycle error:', error.message);
+      logger.error('poll_cycle_error', {
+        errorCategory: 'unknown',
+        origin: 'polling',
+        finality: 'retryable',
+        errorMessage: error.message
+      });
     } finally {
       isPolling = false;
     }
   },
 
   start(intervalMs = 3000) {
-    console.log('🔄 Starting polling service...');
+    logger.info('polling_service_starting', {
+      level: 'info',
+      component: 'polling',
+      event: 'polling_service_starting',
+      timestamp: new Date().toISOString(),
+      context: {}
+    });
     
     // Clear webhook URL to enable polling
     this.clearWebhook().then(() => {
       // Start polling loop
       pollInterval = setInterval(() => this.poll(), intervalMs);
-      console.log(`✅ Polling active (every ${intervalMs}ms)`);
+      logger.info('polling_service_active', {
+        level: 'info',
+        component: 'polling',
+        event: 'polling_service_active',
+        timestamp: new Date().toISOString(),
+        context: { intervalMs }
+      });
     });
   },
 
@@ -115,7 +157,13 @@ const polling = {
     if (pollInterval) {
       clearInterval(pollInterval);
       pollInterval = null;
-      console.log('⏹️ Polling stopped');
+      logger.info('polling_service_stopped', {
+        level: 'info',
+        component: 'polling',
+        event: 'polling_service_stopped',
+        timestamp: new Date().toISOString(),
+        context: {}
+      });
     }
   },
 
@@ -126,11 +174,22 @@ const polling = {
         webhookUrl: '',
         incomingWebhook: 'no'
       });
-      console.log('🔧 Webhook URL cleared for polling mode');
+      logger.info('webhook_cleared_for_polling', {
+        level: 'info',
+        component: 'polling',
+        event: 'webhook_cleared_for_polling',
+        timestamp: new Date().toISOString(),
+        context: {}
+      });
       // Wait for settings to apply
       await new Promise(resolve => setTimeout(resolve, 2000));
     } catch (error) {
-      console.error('Clear webhook error:', error.message);
+      logger.error('webhook_clear_error', {
+        errorCategory: 'provider',
+        origin: 'green_api',
+        finality: 'retryable',
+        errorMessage: error.message
+      });
     }
   }
 };

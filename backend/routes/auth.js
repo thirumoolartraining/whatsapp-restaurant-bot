@@ -1,7 +1,10 @@
 const express = require('express');
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
+const Logger = require('../services/logger');
 const router = express.Router();
+
+const logger = new Logger('auth');
 
 // Public test endpoint - send test notification to any push token (for debugging)
 router.post('/test-push', async (req, res) => {
@@ -13,12 +16,16 @@ router.post('/test-push', async (req, res) => {
     }
     
     const pushNotification = require('../services/pushNotification');
-    console.log('📱 Testing push notification to:', pushToken);
     
     const result = await pushNotification.sendTestNotification(pushToken);
     res.json({ message: 'Test notification sent', result });
   } catch (error) {
-    console.error('Test push error:', error);
+    logger.error('test_push_notification_failed', {
+      errorCategory: 'provider',
+      origin: 'auth',
+      finality: 'retryable',
+      errorMessage: error.message
+    });
     res.status(500).json({ error: error.message });
   }
 });
@@ -81,7 +88,6 @@ router.post('/push-token', async (req, res) => {
     // If user has an ID (database user), update their push token
     if (decoded.id) {
       await User.findByIdAndUpdate(decoded.id, { pushToken });
-      console.log(`📱 Admin push token saved for ${decoded.username}: ${pushToken.substring(0, 30)}...`);
     } else {
       // Try to find user by username and update (for legacy tokens without ID)
       const user = await User.findOneAndUpdate(
@@ -89,16 +95,16 @@ router.post('/push-token', async (req, res) => {
         { pushToken },
         { new: true }
       );
-      if (user) {
-        console.log(`📱 Admin push token saved (by username) for ${decoded.username}: ${pushToken.substring(0, 30)}...`);
-      } else {
-        console.warn(`⚠️ No database user found for ${decoded.username} - push token not saved!`);
-      }
     }
     
     res.json({ message: 'Push token updated' });
   } catch (error) {
-    console.error('Push token error:', error);
+    logger.error('push_token_update_failed', {
+      errorCategory: 'domain',
+      origin: 'auth',
+      finality: 'retryable',
+      errorMessage: error.message
+    });
     res.status(401).json({ error: 'Invalid token' });
   }
 });
@@ -148,7 +154,12 @@ router.post('/test-notification', async (req, res) => {
       res.status(400).json({ error: 'User ID not found' });
     }
   } catch (error) {
-    console.error('Test notification error:', error);
+    logger.error('admin_test_notification_failed', {
+      errorCategory: 'provider',
+      origin: 'auth',
+      finality: 'retryable',
+      errorMessage: error.message
+    });
     res.status(500).json({ error: error.message });
   }
 });

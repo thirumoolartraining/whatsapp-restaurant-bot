@@ -8,6 +8,9 @@ const razorpayService = require('./razorpay');
 const googleSheets = require('./googleSheets');
 const groqAi = require('./groqAi');
 const chatbotImagesService = require('./chatbotImages');
+const Logger = require('./logger');
+
+const logger = new Logger('chatbot');
 const whatsappBroadcast = require('./whatsappBroadcast');
 const conversationState = require('./conversationState');
 const menuHandler = require('./domains/menuHandler');
@@ -45,7 +48,13 @@ const calculateOSRMDistance = async (lat1, lon1, lat2, lon2) => {
     // OSRM public API - Note: format is longitude,latitude (NOT lat,lon!)
     const url = `https://router.project-osrm.org/route/v1/driving/${lon1},${lat1};${lon2},${lat2}?overview=false`;
     
-    console.log(`🗺️ OSRM URL: ${url}`);
+    logger.info('osrm_api_request', {
+      level: 'info',
+      component: 'chatbot',
+      event: 'osrm_api_request',
+      timestamp: new Date().toISOString(),
+      context: { url }
+    });
     
     const response = await axios.get(url, { 
       timeout: 10000,
@@ -54,21 +63,44 @@ const calculateOSRMDistance = async (lat1, lon1, lat2, lon2) => {
       }
     });
     
-    console.log(`🗺️ OSRM Response code: ${response.data.code}`);
+    logger.info('osrm_api_response', {
+      level: 'info',
+      component: 'chatbot',
+      event: 'osrm_api_response',
+      timestamp: new Date().toISOString(),
+      context: { responseCode: response.data.code }
+    });
     
     if (response.data.code === 'Ok' && response.data.routes?.[0]) {
       const distanceInMeters = response.data.routes[0].distance;
       const durationInSeconds = response.data.routes[0].duration;
       const distanceInKm = distanceInMeters / 1000;
       const durationInMins = Math.round(durationInSeconds / 60);
-      console.log(`✅ OSRM road distance: ${distanceInKm.toFixed(2)} KM (approx ${durationInMins} mins drive)`);
+      logger.info('osrm_distance_calculated', {
+        level: 'info',
+        component: 'chatbot',
+        event: 'osrm_distance_calculated',
+        timestamp: new Date().toISOString(),
+        context: { distanceKm: distanceInKm, durationMins: Math.round(durationInSeconds / 60) }
+      });
       return Math.round(distanceInKm * 100) / 100;
     }
     
-    console.log('⚠️ OSRM API returned no valid route:', response.data);
+    logger.warn('osrm_no_route_found', {
+      level: 'warn',
+      component: 'chatbot',
+      event: 'osrm_no_route_found',
+      timestamp: new Date().toISOString(),
+      context: { response: response.data }
+    });
     return null;
   } catch (error) {
-    console.error('❌ OSRM API error:', error.message);
+    logger.error('osrm_api_failed', {
+      errorCategory: 'provider',
+      origin: 'osrm_api',
+      finality: 'retryable',
+      errorMessage: error.message
+    });
     return null;
   }
 };
@@ -89,13 +121,24 @@ const calculateOpenRouteServiceDistance = async (lat1, lon1, lat2, lon2) => {
     if (response.data.features?.[0]?.properties?.segments?.[0]) {
       const distanceInMeters = response.data.features[0].properties.segments[0].distance;
       const distanceInKm = distanceInMeters / 1000;
-      console.log(`✅ OpenRouteService road distance: ${distanceInKm.toFixed(2)} KM`);
+      logger.info('openrouteservice_distance_calculated', {
+        level: 'info',
+        component: 'chatbot',
+        event: 'openrouteservice_distance_calculated',
+        timestamp: new Date().toISOString(),
+        context: { distanceKm: distanceInKm }
+      });
       return Math.round(distanceInKm * 100) / 100;
     }
     
     return null;
   } catch (error) {
-    console.error('OpenRouteService error:', error.message);
+    logger.error('openrouteservice_api_failed', {
+      errorCategory: 'provider',
+      origin: 'openrouteservice_api',
+      finality: 'retryable',
+      errorMessage: error.message
+    });
     return null;
   }
 };
@@ -103,7 +146,13 @@ const calculateOpenRouteServiceDistance = async (lat1, lon1, lat2, lon2) => {
 // Main distance calculator - tries multiple free APIs with smart fallback
 const calculateDistance = async (lat1, lon1, lat2, lon2) => {
   if (!lat1 || !lon1 || !lat2 || !lon2) {
-    console.log('⚠️ Missing coordinates for distance calculation');
+    logger.warn('distance_calculation_missing_coordinates', {
+      level: 'warn',
+      component: 'chatbot',
+      event: 'distance_calculation_missing_coordinates',
+      timestamp: new Date().toISOString(),
+      context: {}
+    });
     return null;
   }
   
@@ -113,25 +162,47 @@ const calculateDistance = async (lat1, lon1, lat2, lon2) => {
   lat2 = parseFloat(lat2);
   lon2 = parseFloat(lon2);
   
-  console.log(`\n📍 ========== DISTANCE CALCULATION ==========`);
-  console.log(`📍 Restaurant: ${lat1}, ${lon1}`);
-  console.log(`📍 Customer: ${lat2}, ${lon2}`);
+  logger.info('distance_calculation_started', {
+    level: 'info',
+    component: 'chatbot',
+    event: 'distance_calculation_started',
+    timestamp: new Date().toISOString(),
+    context: { restaurantCoords: `${lat1},${lon1}`, customerCoords: `${lat2},${lon2}` }
+  });
   
   // Calculate straight-line first for reference
   const straightLineDistance = calculateStraightLineDistance(lat1, lon1, lat2, lon2);
-  console.log(`📏 Straight-line distance: ${straightLineDistance} KM`);
+  logger.info('straight_line_distance_calculated', {
+    level: 'info',
+    component: 'chatbot',
+    event: 'straight_line_distance_calculated',
+    timestamp: new Date().toISOString(),
+    context: { distanceKm: straightLineDistance }
+  });
   
   // Try OSRM API first (free, uses OpenStreetMap data)
   const osrmDistance = await calculateOSRMDistance(lat1, lon1, lat2, lon2);
   if (osrmDistance !== null && osrmDistance > 0) {
-    console.log(`📍 =========================================\n`);
+    logger.info('osrm_distance_success', {
+      level: 'info',
+      component: 'chatbot',
+      event: 'osrm_distance_success',
+      timestamp: new Date().toISOString(),
+      context: { distanceKm: osrmDistance }
+    });
     return osrmDistance;
   }
   
   // Try OpenRouteService as backup
   const orsDistance = await calculateOpenRouteServiceDistance(lat1, lon1, lat2, lon2);
   if (orsDistance !== null && orsDistance > 0) {
-    console.log(`📍 =========================================\n`);
+    logger.info('openrouteservice_distance_success', {
+      level: 'info',
+      component: 'chatbot',
+      event: 'openrouteservice_distance_success',
+      timestamp: new Date().toISOString(),
+      context: { distanceKm: orsDistance }
+    });
     return orsDistance;
   }
   
@@ -140,8 +211,13 @@ const calculateDistance = async (lat1, lon1, lat2, lon2) => {
   if (straightLineDistance === null) return null;
   
   const approximateRoadDistance = straightLineDistance * 1.6;
-  console.log(`⚠️ FALLBACK: Using straight-line × 1.6 = ${approximateRoadDistance.toFixed(2)} KM`);
-  console.log(`📍 =========================================\n`);
+  logger.warn('distance_calculation_fallback', {
+    level: 'warn',
+    component: 'chatbot',
+    event: 'distance_calculation_fallback',
+    timestamp: new Date().toISOString(),
+    context: { straightLineDistance, approximateRoadDistance }
+  });
   
   return Math.round(approximateRoadDistance * 100) / 100;
 };
@@ -770,7 +846,13 @@ const chatbot = {
       return null;
     }
     
-    console.log('🛒 Website CART order check - message:', text);
+    logger.info('website_cart_order_check', {
+      level: 'info',
+      component: 'chatbot',
+      event: 'website_cart_order_check',
+      timestamp: new Date().toISOString(),
+      context: { messageLength: text.length }
+    });
     
     const items = [];
     let total = null;
@@ -786,7 +868,13 @@ const chatbot = {
         const quantity = parseInt(itemMatch[2]);
         const price = parseInt(itemMatch[3]);
         items.push({ name, quantity, price });
-        console.log('📦 Found cart item:', { name, quantity, price });
+        logger.info('cart_item_found', {
+          level: 'info',
+          component: 'chatbot',
+          event: 'cart_item_found',
+          timestamp: new Date().toISOString(),
+          context: { name, quantity, price }
+        });
       }
       
       // Extract total
@@ -797,7 +885,13 @@ const chatbot = {
     }
     
     if (items.length > 0) {
-      console.log('✅ Website cart order extracted:', { items, total });
+      logger.info('website_cart_order_extracted', {
+        level: 'info',
+        component: 'chatbot',
+        event: 'website_cart_order_extracted',
+        timestamp: new Date().toISOString(),
+        context: { itemCount: items.length, total }
+      });
       return { items, total };
     }
     
@@ -822,14 +916,26 @@ const chatbot = {
       return null;
     }
     
-    console.log('🔍 Website order check - message:', text);
+    logger.info('website_order_check', {
+      level: 'info',
+      component: 'chatbot',
+      event: 'website_order_check',
+      timestamp: new Date().toISOString(),
+      context: { messageLength: text.length }
+    });
     
     let itemName = null;
     let price = null;
     
     // Method 1: Parse line by line
     const lines = text.split('\n').map(l => l.trim()).filter(l => l);
-    console.log('📝 Lines:', lines);
+    logger.info('website_order_lines', {
+      level: 'info',
+      component: 'chatbot',
+      event: 'website_order_lines',
+      timestamp: new Date().toISOString(),
+      context: { lineCount: lines.length }
+    });
     
     for (const line of lines) {
       const lowerLine = line.toLowerCase();
@@ -856,11 +962,23 @@ const chatbot = {
       // Remove asterisks anywhere
       cleanedLine = cleanedLine.replace(/\*/g, '').trim();
       
-      console.log('🔄 Cleaned line:', `"${line}" -> "${cleanedLine}"`);
+      logger.info('website_order_line_cleaned', {
+        level: 'info',
+        component: 'chatbot',
+        event: 'website_order_line_cleaned',
+        timestamp: new Date().toISOString(),
+        context: { original: line.substring(0, 50), cleaned: cleanedLine.substring(0, 50) }
+      });
       
       if (cleanedLine.length > 1) {
         itemName = cleanedLine;
-        console.log('📌 Found item name:', itemName);
+        logger.info('website_order_item_found', {
+          level: 'info',
+          component: 'chatbot',
+          event: 'website_order_item_found',
+          timestamp: new Date().toISOString(),
+          context: { itemName: itemName.substring(0, 50) }
+        });
         break; // Take the first valid line as item name
       }
     }
@@ -870,11 +988,23 @@ const chatbot = {
     if (priceMatch) price = parseInt(priceMatch[1]);
     
     if (itemName && itemName.length > 1) {
-      console.log('✅ Website order extracted:', { itemName, price });
+      logger.info('website_order_extracted', {
+        level: 'info',
+        component: 'chatbot',
+        event: 'website_order_extracted',
+        timestamp: new Date().toISOString(),
+        context: { itemName: itemName.substring(0, 50), price }
+      });
       return { itemName, price };
     }
     
-    console.log('❌ Could not extract item name from website order');
+    logger.warn('website_order_extraction_failed', {
+      level: 'warn',
+      component: 'chatbot',
+      event: 'website_order_extraction_failed',
+      timestamp: new Date().toISOString(),
+      context: {}
+    });
     return null;
   },
 
@@ -1215,7 +1345,13 @@ const chatbot = {
     }
     
     if (bestMatch) {
-      console.log(`🔄 Category fuzzy match: "${text}" → "${bestMatch}" (${Math.round(bestScore * 100)}%)`);
+      logger.info('category_fuzzy_match', {
+        level: 'info',
+        component: 'chatbot',
+        event: 'category_fuzzy_match',
+        timestamp: new Date().toISOString(),
+        context: { originalText: text.substring(0, 50), matchedCategory: bestMatch, confidence: Math.round(bestScore * 100) }
+      });
     }
     
     return bestMatch;
@@ -1543,7 +1679,13 @@ const chatbot = {
     
     // If we found a match better than the original, return it
     if (bestMatch && bestMatch !== searchLower && bestScore >= threshold) {
-      console.log(`🔄 Dynamic typo match: "${searchTerm}" → "${bestMatch}" (${Math.round(bestScore * 100)}%)`);
+      logger.info('dynamic_typo_match', {
+        level: 'info',
+        component: 'chatbot',
+        event: 'dynamic_typo_match',
+        timestamp: new Date().toISOString(),
+        context: { originalTerm: searchTerm.substring(0, 50), correctedTerm: bestMatch.substring(0, 50), confidence: Math.round(bestScore * 100) }
+      });
       return bestMatch;
     }
     
@@ -1613,7 +1755,13 @@ const chatbot = {
     
     // Skip fuzzy search for gibberish queries
     if (this.isGibberishSearch(searchTerm)) {
-      console.log(`🚫 Gibberish search detected: "${searchTerm}" - skipping fuzzy search`);
+      logger.info('gibberish_search_detected', {
+        level: 'info',
+        component: 'chatbot',
+        event: 'gibberish_search_detected',
+        timestamp: new Date().toISOString(),
+        context: { searchTerm: searchTerm.substring(0, 50) }
+      });
       return [];
     }
     
@@ -2403,7 +2551,13 @@ const chatbot = {
           // Remove duplicates and non-English
           const cleanVariations = [...new Set(allVariations)].filter(v => !/[^\x00-\x7F]/.test(v));
           
-          console.log(`🔤 Word-by-word translation: "${text}" → [${cleanVariations.join(', ')}]`);
+          logger.info('word_by_word_translation', {
+          level: 'info',
+          component: 'chatbot',
+          event: 'word_by_word_translation',
+          timestamp: new Date().toISOString(),
+          context: { originalText: text.substring(0, 50), variationCount: cleanVariations.length }
+        });
           return { primary: combinedTranslation, variations: cleanVariations };
         }
         
@@ -2411,7 +2565,12 @@ const chatbot = {
         const basicTranslated = this.transliterate(text);
         return { primary: basicTranslated, variations: [basicTranslated] };
       } catch (error) {
-        console.error('AI translation failed:', error.message);
+        logger.error('ai_translation_failed', {
+          errorCategory: 'provider',
+          origin: 'ai_translation',
+          finality: 'retryable',
+          errorMessage: error.message
+        });
         const basicTranslated = this.transliterate(text);
         return { primary: basicTranslated, variations: [basicTranslated] };
       }
@@ -2443,7 +2602,13 @@ const chatbot = {
   async smartSearch(text, menuItems) {
     // Early return for gibberish searches
     if (this.isGibberishSearch(text)) {
-      console.log(`🚫 Gibberish search detected: "${text}" - returning no results`);
+      logger.info('smart_search_gibberish_detected', {
+        level: 'info',
+        component: 'chatbot',
+        event: 'smart_search_gibberish_detected',
+        timestamp: new Date().toISOString(),
+        context: { searchTerm: text.substring(0, 50) }
+      });
       return null;
     }
     
@@ -2463,7 +2628,13 @@ const chatbot = {
     }
     
     if (phraseCorrection !== correctedText) {
-      console.log(`📝 Typo correction: "${correctedText}" → "${phraseCorrection}"`);
+      logger.info('phrase_typo_correction', {
+        level: 'info',
+        component: 'chatbot',
+        event: 'phrase_typo_correction',
+        timestamp: new Date().toISOString(),
+        context: { original: correctedText.substring(0, 50), corrected: phraseCorrection.substring(0, 50) }
+      });
       correctedText = phraseCorrection;
     }
     
@@ -2480,7 +2651,13 @@ const chatbot = {
         }
       }
       if (corrected !== word) {
-        console.log(`📝 Word typo correction: "${word}" → "${corrected}"`);
+        logger.info('word_typo_correction', {
+          level: 'info',
+          component: 'chatbot',
+          event: 'word_typo_correction',
+          timestamp: new Date().toISOString(),
+          context: { original: word.substring(0, 30), corrected: corrected.substring(0, 30) }
+        });
       }
       return corrected;
     });
@@ -2501,7 +2678,13 @@ const chatbot = {
         }
       }
       if (combinedCorrection !== combinedWords) {
-        console.log(`📝 Combined typo correction: "${words.join(' ')}" → "${combinedCorrection}"`);
+        logger.info('combined_typo_correction', {
+          level: 'info',
+          component: 'chatbot',
+          event: 'combined_typo_correction',
+          timestamp: new Date().toISOString(),
+          context: { original: words.join(' ').substring(0, 50), corrected: combinedCorrection.substring(0, 50) }
+        });
         // Add this as a variation but keep the corrected text too
       }
     }
@@ -2525,11 +2708,23 @@ const chatbot = {
     
     // Detect food type preference from primary translation
     const detected = this.detectFoodTypeFromMessage(primaryText);
-    console.log(`🔎 SMART SEARCH: text="${text}", primaryText="${primaryText}", detected=`, detected);
+    logger.info('smart_search_analysis', {
+      level: 'info',
+      component: 'chatbot',
+      event: 'smart_search_analysis',
+      timestamp: new Date().toISOString(),
+      context: { originalText: text.substring(0, 50), primaryText: primaryText.substring(0, 50), foodType: detected?.type || null }
+    });
     
     // Remove food type keywords to get clean search terms
     const primarySearchTerm = this.removeFoodTypeKeywords(primaryText);
-    console.log(`🔎 After removing food type keywords: "${primarySearchTerm}"`);
+    logger.info('food_type_keywords_removed', {
+      level: 'info',
+      component: 'chatbot',
+      event: 'food_type_keywords_removed',
+      timestamp: new Date().toISOString(),
+      context: { originalTerm: primaryText.substring(0, 50), cleanedTerm: primarySearchTerm.substring(0, 50) }
+    });
     
     // Get all search variations (cleaned of food type keywords)
     const searchVariations = allVariations.map(v => this.removeFoodTypeKeywords(v.toLowerCase())).filter(v => v.length >= 2);
@@ -2573,14 +2768,31 @@ const chatbot = {
         const aiMatchedTags = await groqAi.matchSearchToTags(text, allAvailableTags);
         if (aiMatchedTags && aiMatchedTags.length > 0) {
           uniqueSearchTerms = [...new Set([...uniqueSearchTerms, ...aiMatchedTags])];
-          console.log(`🤖 AI added tags: [${aiMatchedTags.join(', ')}]`);
+          logger.info('ai_tag_matching_success', {
+            level: 'info',
+            component: 'chatbot',
+            event: 'ai_tag_matching_success',
+            timestamp: new Date().toISOString(),
+            context: { tagCount: aiMatchedTags.length, tags: aiMatchedTags.slice(0, 5) }
+          });
         }
       } catch (error) {
-        console.error('AI tag matching failed:', error.message);
+        logger.error('ai_tag_matching_failed', {
+          errorCategory: 'provider',
+          origin: 'ai_tag_matching',
+          finality: 'retryable',
+          errorMessage: error.message
+        });
       }
     }
     
-    console.log(`🔍 Search terms with synonyms: [${uniqueSearchTerms.join(', ')}]`);
+    logger.info('search_terms_expanded', {
+      level: 'info',
+      component: 'chatbot',
+      event: 'search_terms_expanded',
+      timestamp: new Date().toISOString(),
+      context: { termCount: uniqueSearchTerms.length, terms: uniqueSearchTerms.slice(0, 10) }
+    });
     
     // If search term is too short after removing keywords, search by ingredient/type only
     const hasSearchTerm = primarySearchTerm.length >= 2;
@@ -2590,22 +2802,52 @@ const chatbot = {
     let searchableItems = menuItems;
     let foodTypeLabel = null;
     
-    console.log(`🔎 Total menu items: ${menuItems.length}`);
+    logger.info('menu_items_total', {
+      level: 'info',
+      component: 'chatbot',
+      event: 'menu_items_total',
+      timestamp: new Date().toISOString(),
+      context: { totalItems: menuItems.length }
+    });
     
     if (detected) {
       if (detected.type === 'veg') {
         searchableItems = menuItems.filter(item => item.foodType === 'veg');
         foodTypeLabel = '🌿 Veg';
-        console.log(`🥬 FILTERED TO VEG ITEMS: ${searchableItems.length} items out of ${menuItems.length}`);
-        console.log(`🥬 VEG item names: ${searchableItems.slice(0, 5).map(i => i.name).join(', ')}...`);
+        logger.info('veg_filter_applied', {
+          level: 'info',
+          component: 'chatbot',
+          event: 'veg_filter_applied',
+          timestamp: new Date().toISOString(),
+          context: { filteredCount: searchableItems.length, totalCount: menuItems.length }
+        });
+        logger.info('veg_items_sample', {
+          level: 'info',
+          component: 'chatbot',
+          event: 'veg_items_sample',
+          timestamp: new Date().toISOString(),
+          context: { sampleItems: searchableItems.slice(0, 3).map(i => i.name) }
+        });
       } else if (detected.type === 'egg') {
         searchableItems = menuItems.filter(item => item.foodType === 'egg');
         foodTypeLabel = '🥚 Egg';
-        console.log(`🥚 FILTERED TO EGG ITEMS: ${searchableItems.length} items out of ${menuItems.length}`);
+        logger.info('egg_filter_applied', {
+          level: 'info',
+          component: 'chatbot',
+          event: 'egg_filter_applied',
+          timestamp: new Date().toISOString(),
+          context: { filteredCount: searchableItems.length, totalCount: menuItems.length }
+        });
       } else if (detected.type === 'nonveg') {
         searchableItems = menuItems.filter(item => item.foodType === 'nonveg' || item.foodType === 'egg');
         foodTypeLabel = '🍗 Non-Veg';
-        console.log(`🍗 FILTERED TO NON-VEG ITEMS: ${searchableItems.length} items out of ${menuItems.length}`);
+        logger.info('nonveg_filter_applied', {
+          level: 'info',
+          component: 'chatbot',
+          event: 'nonveg_filter_applied',
+          timestamp: new Date().toISOString(),
+          context: { filteredCount: searchableItems.length, totalCount: menuItems.length }
+        });
       } else if (detected.type === 'specific') {
         // For specific ingredients like "chicken", "mutton"
         const ingredient = detected.ingredient;
@@ -2615,10 +2857,22 @@ const chatbot = {
           return inName || inTags;
         });
         foodTypeLabel = `🍗 ${ingredient.charAt(0).toUpperCase() + ingredient.slice(1)}`;
-        console.log(`🍖 FILTERED BY INGREDIENT "${ingredient}": ${searchableItems.length} items out of ${menuItems.length}`);
+        logger.info('ingredient_filter_applied', {
+          level: 'info',
+          component: 'chatbot',
+          event: 'ingredient_filter_applied',
+          timestamp: new Date().toISOString(),
+          context: { ingredient, filteredCount: searchableItems.length, totalCount: menuItems.length }
+        });
       }
     } else {
-      console.log(`⚠️ NO FOOD TYPE DETECTED - searching all items`);
+      logger.info('no_food_type_detected', {
+        level: 'info',
+        component: 'chatbot',
+        event: 'no_food_type_detected',
+        timestamp: new Date().toISOString(),
+        context: {}
+      });
     }
     
     // Helper to normalize text for comparison (removes spaces for flexible matching)
@@ -2640,7 +2894,6 @@ const chatbot = {
         });
         
         if (exactMatches.length > 0) {
-          console.log(`✅ Exact name match found: "${searchTerm}" → ${exactMatches.length} item(s)`);
           return { 
             items: exactMatches, 
             foodType: detected, 
@@ -2705,7 +2958,6 @@ const chatbot = {
       });
       
       if (allKeywordsTagMatches.length > 0) {
-        console.log(`✅ All keywords tag/category match: "${primarySearchTerm}" → ${allKeywordsTagMatches.length} item(s)`);
         return { 
           items: allKeywordsTagMatches, 
           foodType: detected, 
@@ -2749,7 +3001,6 @@ const chatbot = {
           : sortedMatches;
         
         if (filteredMatches.length > 0) {
-          console.log(`✅ Any keyword tag match: "${primarySearchTerm}" → ${filteredMatches.length} item(s) (filtered from ${sortedMatches.length})`);
           return { 
             items: filteredMatches, 
             foodType: detected, 
@@ -2880,8 +3131,6 @@ const chatbot = {
       }
       const uniqueKeywords = [...new Set(allKeywords)];
       
-      console.log(`🔍 Tag search - Primary keywords: [${searchKeywords.join(', ')}], All keywords: [${uniqueKeywords.join(', ')}], foodType: ${detected?.type || 'all'}`);
-      
       // Helper to check if item tags OR name OR category match a keyword
       const itemMatchesKeyword = (item, keyword) => {
         const kwLower = keyword.toLowerCase().trim();
@@ -2921,7 +3170,6 @@ const chatbot = {
       });
       
       if (allKeywordsMatch.length > 0) {
-        console.log(`✅ PRIORITY 1 - ALL keywords match: "${searchKeywords.join(' ')}" → ${allKeywordsMatch.length} item(s): [${allKeywordsMatch.map(i => i.name).slice(0, 5).join(', ')}]`);
         return { 
           items: allKeywordsMatch, 
           foodType: detected, 
@@ -2973,7 +3221,6 @@ const chatbot = {
           const matchCounts = Array.from(partialTagMatches.values())
             .filter(m => filteredMatches.includes(m.item))
             .map(m => `${m.item.name}(${m.matchCount})`);
-          console.log(`✅ PRIORITY 2 - Partial tag matches (sorted by count): ${filteredMatches.length} item(s) - [${matchCounts.slice(0, 5).join(', ')}...]`);
           
           return { 
             items: filteredMatches, 
@@ -3103,13 +3350,11 @@ const chatbot = {
     
     if (hasSearchTerm) {
       // Search using ALL translation variations - use searchableItems (filtered by food type)
-      console.log(`🔍 Searching with variations: [${uniqueSearchTerms.join(', ')}]`);
       matchingItems = searchByMultipleTerms(searchableItems, uniqueSearchTerms);
       
       // IMPORTANT: If user explicitly specified food type (e.g., "veg curry"), do NOT fall back to all items
       // Only try all items if no food type was detected (generic search like "curry")
       if (matchingItems.length === 0 && !detected && searchableItems.length < menuItems.length) {
-        console.log(`🔍 No food type detected, falling back to all items...`);
         matchingItems = searchByMultipleTerms(menuItems, uniqueSearchTerms);
       }
       
@@ -3117,12 +3362,10 @@ const chatbot = {
       if (matchingItems.length === 0) {
         const allKeywords = uniqueSearchTerms.flatMap(term => term.split(/\s+/).filter(k => k.length >= 2));
         if (allKeywords.length > 0) {
-          console.log(`🔍 Fallback: finding items matching ANY keyword: [${allKeywords.join(', ')}]`);
           // Search keywords only in searchableItems (respects food type filter)
           matchingItems = searchByMultipleTerms(searchableItems, allKeywords);
           // Only fall back to all items if NO food type was specified
           if (matchingItems.length === 0 && !detected) {
-            console.log(`🔍 No food type detected, trying all items for keywords...`);
             matchingItems = searchByMultipleTerms(menuItems, allKeywords);
           }
         }
@@ -3132,7 +3375,6 @@ const chatbot = {
       // If still no results, use Levenshtein distance to find items with similar names/tags
       // This handles typos like "manchuya" → "manchurian", "birani" → "biryani", "beak fasr" → "breakfast"
       if (matchingItems.length === 0) {
-        console.log(`🔤 Fuzzy Search: Finding items similar to "${primarySearchTerm}"...`);
         
         // Lower threshold (0.45) for better typo tolerance
         const fuzzyThreshold = 0.45;
@@ -3142,7 +3384,6 @@ const chatbot = {
         
         // Only try all menu items if NO food type was detected
         if (fuzzyResults.length === 0 && !detected) {
-          console.log(`🔍 No food type detected, trying fuzzy search on all items...`);
           fuzzyResults = this.fuzzySearchItems(primarySearchTerm, menuItems, fuzzyThreshold);
         }
         
@@ -3188,7 +3429,6 @@ const chatbot = {
         
         if (fuzzyResults.length > 0) {
           matchingItems = fuzzyResults;
-          console.log(`✅ Fuzzy search found ${matchingItems.length} similar items`);
           // Return with "Did you mean" label for fuzzy matches
           return { 
             items: matchingItems, 
@@ -3206,8 +3446,6 @@ const chatbot = {
       // Instead of calling multiple AI services, just return no results
       // This is more honest to the user and reduces API costs
       
-      console.log(`❌ No matching items found for "${text}" after tag-based and fuzzy search`);
-      
     } else if (detected?.type === 'specific' && searchableItems.length > 0) {
       // For specific ingredient searches (e.g., "chicken"), return filtered items
       matchingItems = searchableItems;
@@ -3223,7 +3461,6 @@ const chatbot = {
     // Check if holiday mode is enabled
     const holidayMode = await Settings.getValue('holidayMode', false);
     if (holidayMode) {
-      console.log(`🏖️ Holiday mode is ON - sending holiday message to ${phone}`);
       await whatsapp.sendMessage(phone, 
         `🏖️ *Holiday Notice*\n\n` +
         `Dear Customer,\n\n` +
@@ -3251,12 +3488,24 @@ const chatbot = {
 
     // Save WhatsApp contact for broadcast (non-blocking)
     whatsappBroadcast.addContact(phone, customer.name || senderName, new Date()).catch(err => {
-      console.error('[Chatbot] Failed to save WhatsApp contact:', err.message);
+      logger.error('whatsapp_contact_save_failed', {
+        errorCategory: 'provider',
+        origin: 'whatsapp_broadcast',
+        finality: 'retryable',
+        phone,
+        errorMessage: err.message
+      });
     });
 
     // Save customer to Google Sheets for cost-saving (non-blocking)
     googleSheets.addOrUpdateCustomer(phone, customer.name || senderName, customer.deliveryAddress?.address).catch(err => {
-      console.error('[Chatbot] Failed to save customer to Google Sheets:', err.message);
+      logger.error('google_sheets_customer_save_failed', {
+        errorCategory: 'provider',
+        origin: 'google_sheets',
+        finality: 'retryable',
+        phone,
+        errorMessage: err.message
+      });
     });
 
     // Get all categories to check schedule status
@@ -3305,16 +3554,6 @@ const chatbot = {
       });
     
     // Debug log
-    console.log(`✅ Scheduled ACTIVE: [${scheduledActiveCategories.join(', ') || 'none'}]`);
-    console.log(`🔒 Scheduled LOCKED: [${scheduledLockedCategories.join(', ') || 'none'}]`);
-    console.log(`⏸️ Manually LOCKED: [${manuallyLockedCategories.join(', ') || 'none'}]`);
-    console.log(`📦 Items: ${allMenuItems.length} total → ${menuItems.length} available (${allMenuItems.length - menuItems.length} filtered out)`);
-    
-    // Log filtered out items for debugging
-    const filteredOutItems = allMenuItems.filter(item => !menuItems.includes(item));
-    if (filteredOutItems.length > 0) {
-      console.log(`❌ Filtered out: [${filteredOutItems.map(i => i.name).join(', ')}]`);
-    }
     
     const state = await conversationState.getState(null, { phone });
     
@@ -3323,7 +3562,6 @@ const chatbot = {
     const selection = selectedId || msg;
 
     const currentState = await conversationState.getState(null, { phone });
-    console.log('🤖 Chatbot:', { phone, msg, selection, messageType, currentStep: currentState.currentStep });
 
     try {
       // ========== HANDLE LOCATION MESSAGE ==========
@@ -3337,7 +3575,6 @@ const chatbot = {
       // Detect cart orders from website with format "🛒 Order from Website\n1. Item x2 - ₹XXX"
       else if (!selectedId && message && this.isWebsiteCartOrderIntent(message)) {
         const cartOrder = this.isWebsiteCartOrderIntent(message);
-        console.log('🛒 Website CART order detected:', cartOrder);
         
         // Add all items to customer's cart
         customer.cart = customer.cart || [];
@@ -3362,10 +3599,8 @@ const chatbot = {
               customer.cart.push({ menuItem: menuItem._id, quantity: cartItem.quantity, addedAt: new Date() });
             }
             addedCount++;
-            console.log(`✅ Added to cart: ${menuItem.name} x${cartItem.quantity}`);
           } else {
             notFoundItems.push(cartItem.name);
-            console.log(`❌ Item not found: ${cartItem.name}`);
           }
         }
         
@@ -3390,7 +3625,6 @@ const chatbot = {
       // Detect orders coming from website with format "Hi! I'd like to order: * ItemName *"
       else if (!selectedId && message && this.isWebsiteOrderIntent(message)) {
         const websiteOrder = this.isWebsiteOrderIntent(message);
-        console.log('🌐 Website order detected:', websiteOrder);
         
         // Try exact match first (case-insensitive, trimmed)
         const searchName = websiteOrder.itemName.toLowerCase().trim();
@@ -3400,7 +3634,6 @@ const chatbot = {
         
         if (exactMatch) {
           // Found exact match - show item details with Add to Cart option
-          console.log('✅ Exact match found:', exactMatch.name);
           await conversationState.setState(null, { 
             selectedItem: exactMatch._id.toString(),
             currentStep: 'viewing_item_details'
@@ -3424,7 +3657,6 @@ const chatbot = {
           if (partialMatches.length === 1) {
             // Single partial match - show item details
             const item = partialMatches[0];
-            console.log('✅ Single partial match found:', item.name);
             await conversationState.setState(null, { 
               selectedItem: item._id.toString(),
               currentStep: 'viewing_item_details'
@@ -3432,7 +3664,6 @@ const chatbot = {
             await this.sendItemDetailsForOrder(phone, item);
           } else if (partialMatches.length > 1) {
             // Multiple matches - show options as list
-            console.log('⚠️ Multiple matches found:', partialMatches.map(i => i.name));
             const sections = [{
               title: `Items matching "${websiteOrder.itemName}"`,
               rows: partialMatches.slice(0, 10).map(item => ({
@@ -3445,7 +3676,6 @@ const chatbot = {
             await conversationState.setState(null, { currentStep: 'select_item' }, { phone });
           } else {
             // No match found
-            console.log('❌ No match found for:', websiteOrder.itemName);
             const itemNotAvailableImageUrl = await chatbotImagesService.getImageUrl('item_not_available');
             await sendWithOptionalImage(phone, itemNotAvailableImageUrl, `❌ Sorry, "${websiteOrder.itemName}" is not available.\n\nPlease browse our menu!`, [
               { id: 'view_menu', text: 'View Menu' },
@@ -3489,7 +3719,6 @@ const chatbot = {
       // Handle text/voice menu intent with food type detection (only for text messages, not button clicks)
       else if (!selectedId && this.isShowMenuIntent(msg)) {
         const menuIntent = this.isShowMenuIntent(msg);
-        console.log('🍽️ Menu intent detected:', menuIntent);
         
         if (menuIntent.foodType === 'veg') {
           await menuHandler.handleShowMenuCategories(phone, menuItems, 'veg', '🌿 Veg Menu', correlationId);
@@ -3549,7 +3778,6 @@ const chatbot = {
       // ========== TEXT-BASED ADD TO CART (e.g., "add biryani to cart") ==========
       else if (!selectedId && this.isAddToCartIntent(msg)) {
         const addIntent = this.isAddToCartIntent(msg);
-        console.log('🛒 Add to cart intent detected:', addIntent);
         
         // Search for item by name
         const searchTerm = addIntent.itemName.toLowerCase();
@@ -3592,7 +3820,6 @@ const chatbot = {
           const item = menuItems.find(m => m._id.toString() === currentState.selectedItem);
           if (item) {
             await cartHandler.handleAddToCart({ phone, customer, item, quantity: 1, correlationId });
-            console.log(`✅ Added ${item.name} to cart before checkout`);
           }
         }
         // Clear selectedItem to prevent duplicate additions on subsequent review_pay clicks
@@ -3875,7 +4102,6 @@ const chatbot = {
           await cartHandler.sendQuantitySelection(phone, item);
           await conversationState.setState(null, { currentStep: 'select_quantity' }, { phone });
         } else {
-          console.log('❌ Item not found for add_:', itemId);
           await whatsapp.sendButtons(phone,
             '⚠️ This item is no longer available. Please select another item.',
             [
@@ -3894,7 +4120,6 @@ const chatbot = {
           await cartHandler.sendQuantitySelection(phone, item);
           await conversationState.setState(null, { currentStep: 'select_quantity' }, { phone });
         } else {
-          console.log('❌ Item not found for confirm_add_:', itemId);
           await whatsapp.sendButtons(phone,
             '⚠️ This item is no longer available. Please select another item.',
             [
@@ -3910,7 +4135,6 @@ const chatbot = {
       else if (selection.startsWith('qty_')) {
         const qty = parseInt(selection.replace('qty_', ''));
         const currentState = await conversationState.getState(null, { phone });
-        console.log('🛒 Quantity selected:', { qty, selectedItem: currentState.selectedItem });
         
         const item = menuItems.find(m => m._id.toString() === currentState.selectedItem);
         
@@ -3920,7 +4144,6 @@ const chatbot = {
           await conversationState.setState(null, { selectedItem: null, currentStep: 'item_added' }, { phone });
         } else {
           // Item not found - maybe state was lost, show menu again
-          console.log('❌ Item not found for qty selection, selectedItem:', currentState.selectedItem);
           await whatsapp.sendButtons(phone,
             '⚠️ Something went wrong. Please select an item again.',
             [
@@ -4217,7 +4440,13 @@ const chatbot = {
         }
       }
     } catch (error) {
-      console.error('Chatbot error:', error);
+      logger.error('chatbot_domain_handler_failed', {
+        errorCategory: 'unknown',
+        origin: 'chatbot_handler',
+        finality: 'terminal',
+        phone,
+        errorMessage: error.message
+      });
       await whatsapp.sendButtons(phone, '❌ Something went wrong. Please try again.', [
         { id: 'home', text: 'Main Menu' },
         { id: 'help', text: 'Help' }
@@ -4231,7 +4460,13 @@ const chatbot = {
         await conversationState.setState(null, { lastInteraction: new Date() }, { phone });
       }
     } catch (saveErr) {
-      console.error('Error saving conversation state:', saveErr.message);
+      logger.error('conversation_state_save_failed', {
+        errorCategory: 'validation',
+        origin: 'conversation_state',
+        finality: 'retryable',
+        phone,
+        errorMessage: saveErr.message
+      });
     }
   },
 
@@ -4559,7 +4794,13 @@ const chatbot = {
         { upsert: true }
       );
     } catch (statsErr) {
-      console.error('Error tracking today orders:', statsErr.message);
+      logger.error('order_stats_tracking_failed', {
+        errorCategory: 'validation',
+        origin: 'order_stats',
+        finality: 'retryable',
+        orderId,
+        errorMessage: statsErr.message
+      });
     }
 
     // Emit event for real-time updates
@@ -4568,7 +4809,15 @@ const chatbot = {
     dataEvents.emit('dashboard');
 
     // Sync to Google Sheets
-    googleSheets.addOrder(order).catch(err => console.error('Google Sheets sync error:', err));
+    googleSheets.addOrder(order).catch(err => {
+      logger.error('google_sheets_order_sync_failed', {
+        errorCategory: 'provider',
+        origin: 'google_sheets',
+        finality: 'retryable',
+        orderId,
+        errorMessage: err.message
+      });
+    });
 
     // Send push notification to admin for new UPI order
     try {
@@ -4586,9 +4835,14 @@ const chatbot = {
           });
         }
       }
-      if (admins.length > 0) console.log(`📱 Admin push sent for UPI order ${orderId}`);
     } catch (pushErr) {
-      console.error('Admin push error:', pushErr.message);
+      logger.error('admin_push_notification_failed', {
+        errorCategory: 'provider',
+        origin: 'push_notification',
+        finality: 'retryable',
+        orderId,
+        errorMessage: pushErr.message
+      });
     }
 
     // Clear cart on the fresh customer and save
@@ -4612,7 +4866,13 @@ const chatbot = {
       await whatsapp.sendOrder(phone, order, items, paymentPageUrl, orderDetailsImageUrl);
       return { success: true };
     } catch (err) {
-      console.error('Payment page error:', err);
+      logger.error('payment_page_generation_failed', {
+        errorCategory: 'provider',
+        origin: 'payment_page',
+        finality: 'retryable',
+        orderId,
+        errorMessage: err.message
+      });
       await whatsapp.sendButtons(phone,
         `✅ *Order Created!*\n\nOrder ID: ${orderId}\nTotal: ₹${total}\n\n⚠️ Payment link unavailable.\nPlease contact us.`,
         [
@@ -4866,7 +5126,6 @@ const chatbot = {
     
     // Mark refund as pending if already paid via UPI/online (wait for Razorpay webhook)
     if (order.paymentStatus === 'paid' && order.razorpayPaymentId) {
-      console.log('💰 Marking refund as pending for order:', orderId, 'Payment ID:', order.razorpayPaymentId);
       
       order.refundStatus = 'pending';
       order.refundAmount = order.totalAmount;
@@ -4879,7 +5138,6 @@ const chatbot = {
       });
       
       msg += `\n\n💰 *Refund Processing*\nAmount: ₹${order.totalAmount}\n\n⏱️ Your refund will be processed within 5-7 business days.`;
-      console.log('⏳ Refund pending for order:', orderId);
     } else if (order.paymentStatus === 'paid' && !order.razorpayPaymentId) {
       // Paid but no payment ID (edge case)
       order.refundStatus = 'pending';
@@ -4896,10 +5154,15 @@ const chatbot = {
     dataEvents.emit('dashboard');
     
     // Sync to Google Sheets
-    googleSheets.updateOrderStatus(order.orderId, 'cancelled', order.paymentStatus).catch(err => 
-      console.error('Google Sheets sync error:', err)
-    );
-    console.log('📊 Customer cancelled order, syncing to Google Sheets:', order.orderId);
+    googleSheets.updateOrderStatus(order.orderId, 'cancelled', order.paymentStatus).catch(err => {
+      logger.error('google_sheets_status_sync_failed', {
+        errorCategory: 'provider',
+        origin: 'google_sheets',
+        finality: 'retryable',
+        orderId: order.orderId,
+        errorMessage: err.message
+      });
+    });
 
     // Use pickup-specific cancelled image if it's a pickup order
     const imageKey = isPickup ? 'pickup_cancelled' : 'order_cancelled';
@@ -4998,9 +5261,15 @@ const chatbot = {
     dataEvents.emit('dashboard');
     
     // Sync to Google Sheets
-    googleSheets.updateOrderStatus(order.orderId, 'cancelled', 'refund_processing').catch(err => 
-      console.error('Google Sheets sync error:', err)
-    );
+    googleSheets.updateOrderStatus(order.orderId, 'cancelled', 'refund_processing').catch(err => {
+      logger.error('google_sheets_refund_sync_failed', {
+        errorCategory: 'provider',
+        origin: 'google_sheets',
+        finality: 'retryable',
+        orderId: order.orderId,
+        errorMessage: err.message
+      });
+    });
 
     await whatsapp.sendButtons(phone, 
       `✅ *Refund Requested!*\n\nOrder: ${orderId}\nAmount: ₹${order.totalAmount}\n\n⏱️ Your refund will be processed within 5-7 business days.`,

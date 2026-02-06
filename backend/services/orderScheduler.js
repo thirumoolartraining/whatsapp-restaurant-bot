@@ -2,6 +2,9 @@ const Order = require('../models/Order');
 const whatsapp = require('./whatsapp');
 const googleSheets = require('./googleSheets');
 const chatbotImagesService = require('./chatbotImages');
+const Logger = require('./logger');
+
+const logger = new Logger('orderScheduler');
 
 const PENDING_TIMEOUT_MINUTES = 15;
 
@@ -23,15 +26,18 @@ const orderScheduler = {
         ]
       });
       
-      console.log(`🔍 Found ${expiredOrders.length} expired pending orders (excluding pickup COD orders)`);
-      
       for (const order of expiredOrders) {
         await this.cancelOrder(order);
       }
       
       return expiredOrders.length;
     } catch (error) {
-      console.error('❌ Error checking expired orders:', error.message);
+      logger.error('expired_orders_check_failed', {
+        errorCategory: 'domain',
+        origin: 'order_scheduler',
+        finality: 'retryable',
+        errorMessage: error.message
+      });
       return 0;
     }
   },
@@ -39,8 +45,6 @@ const orderScheduler = {
   // Cancel a single order and notify customer
   async cancelOrder(order) {
     try {
-      console.log(`⏰ Auto-cancelling order ${order.orderId} (pending for >15 mins)`);
-      
       // Update order status
       order.status = 'cancelled';
       order.cancellationReason = 'Auto-cancelled: Payment not received within 15 minutes';
@@ -54,7 +58,13 @@ const orderScheduler = {
       
       // Update Google Sheets
       googleSheets.updateOrderStatus(order.orderId, 'cancelled', 'pending').catch(err =>
-        console.error('Google Sheets sync error:', err)
+        logger.error('google_sheets_sync_failed', {
+          errorCategory: 'provider',
+          origin: 'google_sheets',
+          finality: 'retryable',
+          orderId: order.orderId,
+          errorMessage: err.message
+        })
       );
       
       // Build order details message
@@ -93,17 +103,21 @@ const orderScheduler = {
         ]);
       }
       
-      console.log(`✅ Order ${order.orderId} cancelled and customer notified`);
       return true;
     } catch (error) {
-      console.error(`❌ Error cancelling order ${order.orderId}:`, error.message);
+      logger.error('order_auto_cancellation_failed', {
+        errorCategory: 'domain',
+        origin: 'order_scheduler',
+        finality: 'retryable',
+        orderId: order.orderId,
+        errorMessage: error.message
+      });
       return false;
     }
   },
 
   // Start the scheduler (runs every minute)
   start() {
-    console.log('⏰ Order scheduler started - checking for expired orders every minute');
     
     // Run immediately on start
     this.cancelExpiredOrders();

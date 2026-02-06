@@ -5,7 +5,10 @@ const authorize = require('../middleware/authorize');
 const cloudinaryService = require('../services/cloudinary');
 const dataEvents = require('../services/eventEmitter');
 const multer = require('multer');
+const Logger = require('../services/logger');
 const router = express.Router();
+
+const logger = new Logger('menu');
 
 // Configure multer for memory storage
 const upload = multer({
@@ -214,7 +217,12 @@ router.put('/:id', authenticate, authorize(['admin']), upload.single('image'), a
           const publicId = cloudinaryService.extractPublicId(existingItem.image);
           if (publicId) await cloudinaryService.deleteImage(publicId);
         } catch (e) {
-          console.log('Could not delete old image:', e.message);
+          logger.error('old_menu_image_deletion_failed', {
+            errorCategory: 'provider',
+            origin: 'menu',
+            finality: 'retryable',
+            errorMessage: e.message
+          });
         }
       }
       imageUrl = null;
@@ -227,7 +235,12 @@ router.put('/:id', authenticate, authorize(['admin']), upload.single('image'), a
           const publicId = cloudinaryService.extractPublicId(existingItem.image);
           if (publicId) await cloudinaryService.deleteImage(publicId);
         } catch (e) {
-          console.log('Could not delete old image:', e.message);
+          logger.error('old_menu_image_deletion_failed', {
+            errorCategory: 'provider',
+            origin: 'menu',
+            finality: 'retryable',
+            errorMessage: e.message
+          });
         }
       }
       imageUrl = await cloudinaryService.uploadFromBuffer(req.file.buffer, 'restaurant-bot/menu-items');
@@ -287,7 +300,12 @@ router.delete('/:id', authenticate, authorize(['admin']), async (req, res) => {
         const publicId = cloudinaryService.extractPublicId(item.image);
         if (publicId) await cloudinaryService.deleteImage(publicId);
       } catch (e) {
-        console.log('Could not delete image:', e.message);
+        logger.error('menu_image_deletion_failed', {
+          errorCategory: 'provider',
+          origin: 'menu',
+          finality: 'retryable',
+          errorMessage: e.message
+        });
       }
     }
     

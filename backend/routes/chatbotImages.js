@@ -6,6 +6,9 @@ const authorize = require('../middleware/authorize');
 const cloudinaryService = require('../services/cloudinary');
 const chatbotImagesService = require('../services/chatbotImages');
 const multer = require('multer');
+const Logger = require('../services/logger');
+
+const logger = new Logger('chatbotImages');
 
 // Configure multer for memory storage
 const upload = multer({
@@ -245,12 +248,17 @@ router.get('/', authenticate, authorize(['admin']), async (req, res) => {
     
     // If no images exist, initialize all defaults
     if (images.length === 0) {
-      console.log('[Chatbot Images] No images found, initializing defaults...');
       for (const img of defaultImages) {
         try {
           await ChatbotImage.create(img);
         } catch (createErr) {
-          console.error(`[Chatbot Images] Error creating ${img.key}:`, createErr.message);
+          logger.error('chatbot_image_creation_failed', {
+            errorCategory: 'domain',
+            origin: 'chatbot_images',
+            finality: 'retryable',
+            imageKey: img.key,
+            errorMessage: createErr.message
+          });
         }
       }
       images = await ChatbotImage.find().sort('name');
@@ -260,13 +268,17 @@ router.get('/', authenticate, authorize(['admin']), async (req, res) => {
       const missingImages = defaultImages.filter(img => !existingKeys.includes(img.key));
       
       if (missingImages.length > 0) {
-        console.log(`[Chatbot Images] Found ${missingImages.length} missing images, adding them...`);
         for (const img of missingImages) {
           try {
             await ChatbotImage.create(img);
-            console.log(`[Chatbot Images] Added missing image: ${img.key}`);
           } catch (createErr) {
-            console.error(`[Chatbot Images] Error creating ${img.key}:`, createErr.message);
+            logger.error('missing_chatbot_image_creation_failed', {
+              errorCategory: 'domain',
+              origin: 'chatbot_images',
+              finality: 'retryable',
+              imageKey: img.key,
+              errorMessage: createErr.message
+            });
             // Continue with other images even if one fails
           }
         }
@@ -276,7 +288,12 @@ router.get('/', authenticate, authorize(['admin']), async (req, res) => {
     
     res.json(images);
   } catch (error) {
-    console.error('[Chatbot Images] GET error:', error);
+    logger.error('chatbot_images_fetch_failed', {
+      errorCategory: 'domain',
+      origin: 'chatbot_images',
+      finality: 'terminal',
+      errorMessage: error.message
+    });
     res.status(500).json({ error: error.message });
   }
 });
@@ -316,7 +333,12 @@ router.put('/:key', auth, upload.single('image'), async (req, res) => {
       try {
         await cloudinaryService.deleteImage(chatbotImage.cloudinaryPublicId);
       } catch (e) {
-        console.log('Could not delete old image:', e.message);
+        logger.error('old_chatbot_image_deletion_failed', {
+          errorCategory: 'provider',
+          origin: 'chatbot_images',
+          finality: 'retryable',
+          errorMessage: e.message
+        });
       }
     }
 
@@ -359,11 +381,16 @@ router.put('/:key', auth, upload.single('image'), async (req, res) => {
 
     // Clear cache so new image is used immediately
     chatbotImagesService.clearCache();
-    console.log(`[Chatbot Images] Cache cleared after uploading ${key}`);
 
     res.json(chatbotImage);
   } catch (error) {
-    console.error('Upload error:', error);
+    logger.error('chatbot_image_upload_failed', {
+      errorCategory: 'domain',
+      origin: 'chatbot_images',
+      finality: 'terminal',
+      key,
+      errorMessage: error.message
+    });
     res.status(500).json({ error: error.message });
   }
 });
@@ -384,7 +411,12 @@ router.post('/:key/reset', auth, async (req, res) => {
       try {
         await cloudinaryService.deleteImage(existing.cloudinaryPublicId);
       } catch (e) {
-        console.log('Could not delete image:', e.message);
+        logger.error('chatbot_image_deletion_failed', {
+          errorCategory: 'provider',
+          origin: 'chatbot_images',
+          finality: 'retryable',
+          errorMessage: e.message
+        });
       }
     }
 
@@ -397,10 +429,16 @@ router.post('/:key/reset', auth, async (req, res) => {
 
     // Clear cache so reset takes effect immediately
     chatbotImagesService.clearCache();
-    console.log(`[Chatbot Images] Cache cleared after resetting ${key}`);
 
     res.json(chatbotImage);
   } catch (error) {
+    logger.error('chatbot_image_reset_failed', {
+      errorCategory: 'domain',
+      origin: 'chatbot_images',
+      finality: 'terminal',
+      key,
+      errorMessage: error.message
+    });
     res.status(500).json({ error: error.message });
   }
 });

@@ -512,7 +512,14 @@ async function createOutboundMessage(toPhone, messageType, payload) {
       status: 'pending'
     });
   } catch (error) {
-    console.error('Failed to create outbound message record:', error);
+    logger.error('outbound_message_creation_failed', {
+      errorCategory: 'domain',
+      origin: 'whatsapp',
+      finality: 'retryable',
+      phone,
+      messageType,
+      errorMessage: error.message
+    });
     return null;
   }
 }

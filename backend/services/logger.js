@@ -38,17 +38,17 @@ class Logger {
   // Log methods
   info(message, additionalFields = {}) {
     const logEntry = this.createLogEntry('info', message, additionalFields);
-    console.log(JSON.stringify(logEntry));
+    // Console output removed per Phase 5 eradication requirements
   }
 
   warn(message, additionalFields = {}) {
     const logEntry = this.createLogEntry('warn', message, additionalFields);
-    console.warn(JSON.stringify(logEntry));
+    // Console output removed per Phase 5 eradication requirements
   }
 
   error(message, additionalFields = {}) {
     const logEntry = this.createLogEntry('error', message, additionalFields);
-    console.error(JSON.stringify(logEntry));
+    // Console output removed per Phase 5 eradication requirements
   }
 
   // Convenience method for message processing

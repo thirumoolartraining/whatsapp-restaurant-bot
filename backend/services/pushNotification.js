@@ -1,7 +1,10 @@
 const { Expo } = require('expo-server-sdk');
+const Logger = require('./logger');
 
 // Create a new Expo SDK client
 const expo = new Expo();
+
+const logger = new Logger('pushNotification');
 
 // Store badge counts per user (in production, use Redis or database)
 const badgeCounts = new Map();
@@ -37,7 +40,12 @@ const pushNotification = {
    */
   async sendNotification(pushToken, title, body, data = {}, channelId = 'default') {
     if (!Expo.isExpoPushToken(pushToken)) {
-      console.error(`Push token ${pushToken} is not a valid Expo push token`);
+      logger.error('invalid_expo_push_token', {
+        errorCategory: 'validation',
+        origin: 'push_notification',
+        finality: 'terminal',
+        pushToken
+      });
       return false;
     }
 
@@ -77,21 +85,28 @@ const pushNotification = {
 
     try {
       const tickets = await expo.sendPushNotificationsAsync([message]);
-      console.log('📱 Push notification sent:', tickets);
       
       // Check for errors in tickets
       for (const ticket of tickets) {
         if (ticket.status === 'error') {
-          console.error(`Push notification error: ${ticket.message}`);
-          if (ticket.details && ticket.details.error) {
-            console.error(`Error code: ${ticket.details.error}`);
-          }
+          logger.error('push_notification_ticket_error', {
+            errorCategory: 'provider',
+            origin: 'push_notification',
+            finality: 'retryable',
+            errorMessage: ticket.message,
+            errorCode: ticket.details?.error
+          });
         }
       }
       
       return tickets;
     } catch (error) {
-      console.error('Push notification error:', error.message);
+      logger.error('push_notification_send_failed', {
+        errorCategory: 'provider',
+        origin: 'push_notification',
+        finality: 'retryable',
+        errorMessage: error.message
+      });
       return false;
     }
   },
@@ -109,7 +124,12 @@ const pushNotification = {
     
     for (const pushToken of pushTokens) {
       if (!Expo.isExpoPushToken(pushToken)) {
-        console.error(`Push token ${pushToken} is not a valid Expo push token`);
+        logger.error('invalid_expo_push_token', {
+          errorCategory: 'validation',
+          origin: 'push_notification',
+          finality: 'terminal',
+          pushToken
+        });
         continue;
       }
 
@@ -138,7 +158,6 @@ const pushNotification = {
     }
 
     if (messages.length === 0) {
-      console.log('No valid push tokens to send notifications');
       return [];
     }
 
@@ -151,11 +170,15 @@ const pushNotification = {
         const ticketChunk = await expo.sendPushNotificationsAsync(chunk);
         tickets.push(...ticketChunk);
       } catch (error) {
-        console.error('Push notification chunk error:', error.message);
+        logger.error('push_notification_chunk_error', {
+          errorCategory: 'provider',
+          origin: 'push_notification',
+          finality: 'retryable',
+          errorMessage: error.message
+        });
       }
     }
 
-    console.log(`📱 Sent ${tickets.length} push notifications`);
     return tickets;
   },
 
@@ -211,7 +234,6 @@ const pushNotification = {
       .map(dp => dp.pushToken);
     
     if (tokens.length === 0) {
-      console.log('No online delivery partners with push tokens');
       return [];
     }
 
@@ -241,10 +263,13 @@ const pushNotification = {
    * @param {string} pushToken - Expo push token
    */
   async sendTestNotification(pushToken) {
-    console.log('📱 Sending test notification to:', pushToken);
-    
     if (!Expo.isExpoPushToken(pushToken)) {
-      console.error('Invalid push token:', pushToken);
+      logger.error('invalid_test_push_token', {
+        errorCategory: 'validation',
+        origin: 'push_notification',
+        finality: 'terminal',
+        pushToken
+      });
       return { error: 'Invalid token' };
     }
 
@@ -264,22 +289,29 @@ const pushNotification = {
 
     try {
       const tickets = await expo.sendPushNotificationsAsync([message]);
-      console.log('📱 Test notification tickets:', JSON.stringify(tickets, null, 2));
       
       // Check ticket status
       for (const ticket of tickets) {
         if (ticket.status === 'error') {
-          console.error('Ticket error:', ticket.message);
-          if (ticket.details) {
-            console.error('Error details:', ticket.details);
-          }
+          logger.error('test_notification_ticket_error', {
+            errorCategory: 'provider',
+            origin: 'push_notification',
+            finality: 'retryable',
+            errorMessage: ticket.message,
+            errorDetails: ticket.details
+          });
           return { error: ticket.message, details: ticket.details };
         }
       }
       
       return { success: true, tickets };
     } catch (error) {
-      console.error('Test notification error:', error);
+      logger.error('test_notification_failed', {
+        errorCategory: 'provider',
+        origin: 'push_notification',
+        finality: 'retryable',
+        errorMessage: error.message
+      });
       return { error: error.message };
     }
   },
@@ -302,17 +334,26 @@ const pushNotification = {
         // Log any errors
         for (const [receiptId, receipt] of Object.entries(receiptChunk)) {
           if (receipt.status === 'error') {
-            console.error(`Receipt ${receiptId} error:`, receipt.message);
-            if (receipt.details) {
-              console.error('Details:', receipt.details);
-            }
+            logger.error('receipt_check_error', {
+              errorCategory: 'provider',
+              origin: 'push_notification',
+              finality: 'retryable',
+              receiptId,
+              errorMessage: receipt.message,
+              errorDetails: receipt.details
+            });
           }
         }
       }
       
       return receipts;
     } catch (error) {
-      console.error('Error checking receipts:', error);
+      logger.error('receipt_check_failed', {
+        errorCategory: 'provider',
+        origin: 'push_notification',
+        finality: 'retryable',
+        errorMessage: error.message
+      });
       return [];
     }
   },

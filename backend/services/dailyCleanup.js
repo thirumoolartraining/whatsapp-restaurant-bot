@@ -3,6 +3,9 @@ const Customer = require('../models/Customer');
 const DashboardStats = require('../models/DashboardStats');
 const dataEvents = require('./eventEmitter');
 const googleSheets = require('./googleSheets');
+const Logger = require('./logger');
+
+const logger = new Logger('dailyCleanup');
 
 const RETENTION_DAYS = 15; // Delete hidden orders after 15 days
 
@@ -40,7 +43,12 @@ const dailyCleanup = {
       
       // Only reset if it's a new day
       if (stats.todayDate !== today) {
-        console.log(`🌙 Midnight reset - Previous day revenue: ₹${stats.todayRevenue}, orders: ${stats.todayOrders}`);
+        logger.info('midnight_stats_reset', {
+          component: 'daily_cleanup',
+          event: 'midnight_stats_reset',
+          todayRevenue: stats.todayRevenue,
+          todayOrders: stats.todayOrders
+        });
         
         // Save yesterday's stats to Google Sheets daily_reports before resetting
         const yesterday = new Date();
@@ -118,16 +126,23 @@ const dailyCleanup = {
         
         await stats.save();
         
-        console.log(`✅ Today's stats reset for ${today}`);
-        console.log(`📊 Yesterday's report saved to Google Sheets`);
+        logger.info('today_stats_reset_completed', {
+          component: 'daily_cleanup',
+          event: 'today_stats_reset_completed',
+          today
+        });
         dataEvents.emit('dashboard');
         
         // Clean up empty date headers from Google Sheets
-        console.log('📅 Cleaning up empty date headers from Google Sheets...');
         await googleSheets.cleanupEmptyDateHeaders();
       }
     } catch (error) {
-      console.error('❌ Error resetting today stats:', error.message);
+      logger.error('today_stats_reset_failed', {
+        errorCategory: 'domain',
+        origin: 'daily_cleanup',
+        finality: 'retryable',
+        errorMessage: error.message
+      });
     }
   },
 
@@ -150,10 +165,14 @@ const dailyCleanup = {
       await googleSheets.updateDashboardStat('Total Orders', stats.totalOrders);
       await googleSheets.updateDashboardStat('Total Revenue', stats.totalRevenue);
       
-      console.log(`📊 Saved stats: ${orders.length} orders, ₹${revenue} revenue`);
       return stats;
     } catch (error) {
-      console.error('❌ Error saving order stats:', error.message);
+      logger.error('order_stats_save_failed', {
+        errorCategory: 'domain',
+        origin: 'daily_cleanup',
+        finality: 'retryable',
+        errorMessage: error.message
+      });
     }
   },
 
@@ -168,10 +187,14 @@ const dailyCleanup = {
       // Also sync to Google Sheets
       await googleSheets.updateDashboardStat('Total Customers', stats.totalCustomers);
       
-      console.log(`📊 Saved stats: ${count} customers`);
       return stats;
     } catch (error) {
-      console.error('❌ Error saving customer stats:', error.message);
+      logger.error('customer_stats_save_failed', {
+        errorCategory: 'domain',
+        origin: 'daily_cleanup',
+        finality: 'retryable',
+        errorMessage: error.message
+      });
     }
   },
 
@@ -188,14 +211,22 @@ const dailyCleanup = {
       });
       
       if (result.deletedCount > 0) {
-        console.log(`🗑️ Permanently deleted ${result.deletedCount} hidden orders older than ${RETENTION_DAYS} days`);
-      } else {
-        console.log(`📦 No hidden orders older than ${RETENTION_DAYS} days to delete`);
+        logger.info('old_orders_deleted', {
+          component: 'daily_cleanup',
+          event: 'old_orders_deleted',
+          deletedCount: result.deletedCount,
+          retentionDays: RETENTION_DAYS
+        });
       }
       
       return result.deletedCount;
     } catch (error) {
-      console.error('❌ Error cleaning up old orders:', error.message);
+      logger.error('old_orders_cleanup_failed', {
+        errorCategory: 'domain',
+        origin: 'daily_cleanup',
+        finality: 'retryable',
+        errorMessage: error.message
+      });
       return 0;
     }
   },
@@ -231,29 +262,36 @@ const dailyCleanup = {
       
       if (deletedCount > 0) {
         await this.saveCustomerStats(deletedCount);
-        console.log(`🗑️ Deleted ${deletedCount} inactive customers`);
-      } else {
-        console.log('👥 No inactive customers to clean up');
+        logger.info('inactive_customers_deleted', {
+          component: 'daily_cleanup',
+          event: 'inactive_customers_deleted',
+          deletedCount
+        });
       }
       
       return deletedCount;
     } catch (error) {
-      console.error('❌ Error cleaning up customers:', error.message);
+      logger.error('inactive_customers_cleanup_failed', {
+        errorCategory: 'domain',
+        origin: 'daily_cleanup',
+        finality: 'retryable',
+        errorMessage: error.message
+      });
       return 0;
     }
   },
 
   // Run daily cleanup
   async runCleanup() {
-    console.log('🧹 Starting daily cleanup...');
-    console.log(`📅 Deleting hidden orders older than ${RETENTION_DAYS} days`);
-    
     const ordersDeleted = await this.cleanupOldOrders();
     const customersDeleted = await this.cleanupInactiveCustomers();
     
-    console.log('✅ Daily cleanup completed!');
-    console.log(`   Hidden orders deleted: ${ordersDeleted}`);
-    console.log(`   Inactive customers deleted: ${customersDeleted}`);
+    logger.info('daily_cleanup_completed', {
+      component: 'daily_cleanup',
+      event: 'daily_cleanup_completed',
+      ordersDeleted,
+      customersDeleted
+    });
     
     return { ordersDeleted, customersDeleted };
   },
@@ -265,16 +303,11 @@ const dailyCleanup = {
 
   // Start the scheduler
   start() {
-    console.log(`📅 Daily cleanup scheduler started`);
-    console.log(`   - Today's revenue resets at 12:00 AM`);
-    console.log(`   - Empty date headers cleanup at 12:00 AM`);
-    console.log(`   - Hidden orders deleted after ${RETENTION_DAYS} days`);
     
     // Check every minute
     setInterval(async () => {
       // Reset today's stats at midnight
       if (this.isMidnight()) {
-        console.log('⏰ 12:00 AM - Resetting today\'s stats...');
         await this.resetTodayStats();
       }
     }, 60 * 1000); // Check every minute
@@ -283,11 +316,15 @@ const dailyCleanup = {
     setInterval(async () => {
       const now = new Date();
       if (now.getHours() === 2 && now.getMinutes() === 0) {
-        console.log('⏰ 2:00 AM - Running data cleanup...');
         try {
           await this.runCleanup();
         } catch (error) {
-          console.error('Daily cleanup failed:', error);
+          logger.error('daily_cleanup_run_failed', {
+            errorCategory: 'domain',
+            origin: 'daily_cleanup',
+            finality: 'retryable',
+            errorMessage: error.message
+          });
         }
       }
     }, 60 * 1000);
@@ -308,10 +345,15 @@ const dailyCleanup = {
         stats.todayOrders = 0;
         stats.todayDate = today;
         await stats.save();
-        console.log(`📊 Initialized today's stats for ${today}`);
       }
     } catch (error) {
-      console.error('❌ Error initializing today stats:', error.message);
+      logger.error('today_stats_initialization_failed', {
+        errorCategory: 'domain',
+        origin: 'daily_cleanup',
+        finality: 'retryable',
+        today,
+        errorMessage: error.message
+      });
     }
   }
 };

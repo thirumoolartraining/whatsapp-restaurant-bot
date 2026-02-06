@@ -12,7 +12,10 @@ const chatbotImagesService = require('../services/chatbotImages');
 const dataEvents = require('../services/eventEmitter');
 const razorpayService = require('../services/razorpay');
 const multer = require('multer');
+const Logger = require('../services/logger');
 const router = express.Router();
+
+const logger = new Logger('deliveryboy');
 
 // Configure multer for memory storage
 const upload = multer({
@@ -76,10 +79,15 @@ const sendPasswordEmail = async (email, name, password) => {
 
   try {
     await apiInstance.sendTransacEmail(sendSmtpEmail);
-    console.log(`📧 Password email sent to ${email}`);
     return true;
   } catch (error) {
-    console.error('Brevo email error:', error.message);
+    logger.error('password_email_failed', {
+      errorCategory: 'provider',
+      origin: 'deliveryboy',
+      finality: 'retryable',
+      email,
+      errorMessage: error.message
+    });
     return false;
   }
 };
@@ -193,7 +201,12 @@ router.post('/', authenticate, authorize(['admin']), upload.single('photo'), asy
     
     res.status(201).json(result);
   } catch (error) {
-    console.error('Add delivery boy error:', error);
+    logger.error('delivery_boy_creation_failed', {
+      errorCategory: 'domain',
+      origin: 'deliveryboy',
+      finality: 'terminal',
+      errorMessage: error.message
+    });
     res.status(500).json({ error: error.message });
   }
 });
@@ -217,7 +230,6 @@ router.put('/:id', authenticate, authorize(['admin']), upload.single('photo'), a
       // If deactivating, increment tokenVersion to invalidate all existing sessions
       if (deliveryBoy.isActive && !newIsActive) {
         deliveryBoy.tokenVersion = (deliveryBoy.tokenVersion || 0) + 1;
-        console.log(`🔒 Deactivated delivery partner ${deliveryBoy.name}, invalidating sessions`);
       }
       deliveryBoy.isActive = newIsActive;
     }
@@ -229,7 +241,12 @@ router.put('/:id', authenticate, authorize(['admin']), upload.single('photo'), a
         try {
           await cloudinaryService.deleteImage(deliveryBoy.photoPublicId);
         } catch (e) {
-          console.log('Could not delete old photo:', e.message);
+          logger.error('old_photo_deletion_failed', {
+            errorCategory: 'provider',
+            origin: 'deliveryboy',
+            finality: 'retryable',
+            errorMessage: e.message
+          });
         }
       }
       
@@ -280,7 +297,12 @@ router.delete('/:id', authenticate, authorize(['admin']), async (req, res) => {
       try {
         await cloudinaryService.deleteImage(deliveryBoy.photoPublicId);
       } catch (e) {
-        console.log('Could not delete photo:', e.message);
+        logger.error('photo_deletion_failed', {
+          errorCategory: 'provider',
+          origin: 'deliveryboy',
+          finality: 'retryable',
+          errorMessage: e.message
+        });
       }
     }
     
@@ -531,7 +553,6 @@ router.post('/push-token', async (req, res) => {
     
     await DeliveryBoy.findByIdAndUpdate(decoded.id, { pushToken });
     
-    console.log(`📱 Push token updated for delivery partner ${decoded.id}`);
     
     res.json({ message: 'Push token updated' });
   } catch (error) {
@@ -586,7 +607,12 @@ router.post('/test-notification', async (req, res) => {
       res.status(400).json({ error: 'No push token registered for this user' });
     }
   } catch (error) {
-    console.error('Test notification error:', error);
+    logger.error('test_notification_failed', {
+      errorCategory: 'provider',
+      origin: 'deliveryboy',
+      finality: 'retryable',
+      errorMessage: error.message
+    });
     res.status(500).json({ error: error.message });
   }
 });
@@ -695,7 +721,12 @@ router.get('/orders/history/sheets', verifyDeliveryToken, async (req, res) => {
     });
     
     if (error) {
-      console.error('Error fetching from sheets:', error);
+      logger.error('sheets_fetch_failed', {
+        errorCategory: 'provider',
+        origin: 'deliveryboy',
+        finality: 'retryable',
+        errorMessage: error.message
+      });
     }
     
     // Also check MongoDB for any recent orders that might not be in sheets yet
@@ -759,7 +790,12 @@ router.get('/orders/history/sheets', verifyDeliveryToken, async (req, res) => {
       source: sheetOrders.length > 0 ? 'sheets' : 'mongodb'
     });
   } catch (error) {
-    console.error('Error in history/sheets endpoint:', error);
+    logger.error('delivery_history_fetch_failed', {
+      errorCategory: 'domain',
+      origin: 'deliveryboy',
+      finality: 'terminal',
+      errorMessage: error.message
+    });
     res.status(500).json({ error: error.message });
   }
 });
@@ -828,7 +864,12 @@ router.get('/orders/history/filtered', verifyDeliveryToken, async (req, res) => 
     });
     
     if (error) {
-      console.error('Error fetching from sheets, falling back to MongoDB:', error);
+      logger.error('sheets_fetch_fallback_failed', {
+        errorCategory: 'provider',
+        origin: 'deliveryboy',
+        finality: 'retryable',
+        errorMessage: error.message
+      });
       
       // Fallback to MongoDB if sheets fail
       let dateFilter = {};
@@ -928,7 +969,12 @@ router.get('/orders/history/filtered', verifyDeliveryToken, async (req, res) => 
       source: 'sheets'
     });
   } catch (error) {
-    console.error('Error in history/filtered endpoint:', error);
+    logger.error('filtered_history_fetch_failed', {
+      errorCategory: 'domain',
+      origin: 'deliveryboy',
+      finality: 'terminal',
+      errorMessage: error.message
+    });
     res.status(500).json({ error: error.message });
   }
 });
@@ -1018,7 +1064,12 @@ router.post('/orders/:orderId/claim', verifyDeliveryToken, async (req, res) => {
     
     res.json({ message: 'Order claimed successfully', order });
   } catch (error) {
-    console.error('Claim order error:', error);
+    logger.error('order_claim_failed', {
+      errorCategory: 'domain',
+      origin: 'deliveryboy',
+      finality: 'terminal',
+      errorMessage: error.message
+    });
     res.status(500).json({ error: error.message });
   }
 });
@@ -1080,7 +1131,12 @@ router.post('/orders/:orderId/mark-ready', verifyDeliveryToken, async (req, res)
     
     res.json({ message: 'Order marked as ready', order });
   } catch (error) {
-    console.error('Mark ready error:', error);
+    logger.error('mark_ready_failed', {
+      errorCategory: 'domain',
+      origin: 'deliveryboy',
+      finality: 'terminal',
+      errorMessage: error.message
+    });
     res.status(500).json({ error: error.message });
   }
 });
@@ -1253,7 +1309,14 @@ router.post('/orders/:orderId/delivered', verifyDeliveryToken, async (req, res) 
     
     // Update customer order history in Google Sheets (non-blocking)
     googleSheets.updateCustomerOrder(order.customer.phone, order, 'delivered').catch(err => {
-      console.error('Failed to update customer order in sheets:', err.message);
+      logger.error('customer_order_sheets_update_failed', {
+        errorCategory: 'provider',
+        origin: 'deliveryboy',
+        finality: 'retryable',
+        customerPhone: order.customer.phone,
+        orderId: order.orderId,
+        errorMessage: err.message
+      });
     });
     
     // INSTANT CLEANUP: Hide delivered order from dashboard immediately
@@ -1264,10 +1327,15 @@ router.post('/orders/:orderId/delivered', verifyDeliveryToken, async (req, res) 
           { orderId: order.orderId },
           { $set: { isHidden: true } }
         );
-        console.log(`🧹 Order ${order.orderId} hidden from dashboard (delivered by delivery partner)`);
         dataEvents.emit('orders');
       } catch (cleanupErr) {
-        console.error('Instant cleanup error:', cleanupErr.message);
+        logger.error('instant_cleanup_failed', {
+          errorCategory: 'domain',
+          origin: 'deliveryboy',
+          finality: 'retryable',
+          orderId: order.orderId,
+          errorMessage: cleanupErr.message
+        });
       }
     }, 3000); // 3 second delay to ensure sheets sync
     
@@ -1342,7 +1410,12 @@ router.post('/orders/:orderId/generate-qr', verifyDeliveryToken, async (req, res
       merchantVpa: merchantVpa || null
     });
   } catch (error) {
-    console.error('Generate QR error:', error);
+    logger.error('qr_generation_failed', {
+      errorCategory: 'provider',
+      origin: 'deliveryboy',
+      finality: 'terminal',
+      errorMessage: error.message
+    });
     res.status(500).json({ error: error.message });
   }
 });
@@ -1444,11 +1517,22 @@ router.get('/orders/:orderId/check-payment', verifyDeliveryToken, async (req, re
         message: paymentLinkDetails.status === 'created' ? 'Waiting for payment...' : `Payment status: ${paymentLinkDetails.status}`
       });
     } catch (razorpayError) {
-      console.error('Razorpay fetch error:', razorpayError);
+      logger.error('razorpay_payment_fetch_failed', {
+        errorCategory: 'provider',
+        origin: 'deliveryboy',
+        finality: 'retryable',
+        orderId,
+        errorMessage: razorpayError.message || razorpayError.toString()
+      });
       res.json({ status: 'pending', message: 'Checking payment status...' });
     }
   } catch (error) {
-    console.error('Check payment error:', error);
+    logger.error('payment_status_check_failed', {
+      errorCategory: 'provider',
+      origin: 'deliveryboy',
+      finality: 'terminal',
+      errorMessage: error.message
+    });
     res.status(500).json({ error: error.message });
   }
 });

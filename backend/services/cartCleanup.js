@@ -3,6 +3,9 @@ const MenuItem = require('../models/MenuItem');
 const cron = require('node-cron');
 const whatsapp = require('./whatsapp');
 const chatbotImagesService = require('./chatbotImages');
+const Logger = require('./logger');
+
+const logger = new Logger('cartCleanup');
 
 // Track which customers have been warned (to avoid duplicate warnings)
 const warnedCustomers = new Set();
@@ -73,14 +76,24 @@ const sendExpiryWarnings = async () => {
           }
           
           warnedCustomers.add(warningKey);
-          console.log(`[Cart Warning] Sent expiry warning to ${customer.phone} for ${expiringItems.length} items`);
         } catch (error) {
-          console.error(`[Cart Warning] Failed to send warning to ${customer.phone}:`, error.message);
+          logger.error('cart_expiry_warning_failed', {
+            errorCategory: 'provider',
+            origin: 'cart_cleanup',
+            finality: 'retryable',
+            customerPhone: customer.phone,
+            errorMessage: error.message
+          });
         }
       }
     }
   } catch (error) {
-    console.error('[Cart Warning] Error sending expiry warnings:', error);
+    logger.error('cart_expiry_warnings_failed', {
+      errorCategory: 'domain',
+      origin: 'cart_cleanup',
+      finality: 'retryable',
+      errorMessage: error.message
+    });
   }
 };
 
@@ -172,23 +185,37 @@ const cleanupExpiredCartItems = async () => {
               await whatsapp.sendButtons(customer.phone, message, buttons);
             }
             
-            console.log(`[Cart Cleanup] Notified ${customer.phone} about ${itemsToRemove.length} removed items`);
-            
             // Remove from warned set since items are now cleared
             const warningKeys = Array.from(warnedCustomers).filter(key => key.startsWith(customer.phone));
             warningKeys.forEach(key => warnedCustomers.delete(key));
           } catch (error) {
-            console.error(`[Cart Cleanup] Failed to notify ${customer.phone}:`, error.message);
+            logger.error('cart_cleanup_notification_failed', {
+              errorCategory: 'provider',
+              origin: 'cart_cleanup',
+              finality: 'retryable',
+              customerPhone: customer.phone,
+              errorMessage: error.message
+            });
           }
         }
       }
     }
     
     if (totalItemsRemoved > 0) {
-      console.log(`[Cart Cleanup] Removed ${totalItemsRemoved} expired items from ${customersAffected} customer carts`);
+      logger.info('cart_cleanup_completed', {
+        component: 'cart_cleanup',
+        event: 'cart_cleanup_completed',
+        customersAffected,
+        totalItemsRemoved
+      });
     }
   } catch (error) {
-    console.error('[Cart Cleanup] Error cleaning up expired cart items:', error);
+    logger.error('cart_cleanup_failed', {
+      errorCategory: 'domain',
+      origin: 'cart_cleanup',
+      finality: 'retryable',
+      errorMessage: error.message
+    });
   }
 };
 
@@ -204,7 +231,10 @@ const startCartCleanupScheduler = () => {
     await cleanupExpiredCartItems();
   });
   
-  console.log('[Cart Cleanup] Scheduler started - warnings and cleanup running every 5 minutes');
+  logger.info('scheduler_started', {
+    component: 'cart_cleanup',
+    event: 'scheduler_started'
+  });
 };
 
 module.exports = {

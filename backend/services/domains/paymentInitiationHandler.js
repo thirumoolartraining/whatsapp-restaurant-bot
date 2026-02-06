@@ -117,7 +117,12 @@ const calculateDeliveryCharge = async (customerLat, customerLon) => {
     };
     
   } catch (error) {
-    console.error('Error calculating delivery charge:', error);
+    logger.error('delivery_charge_calculation_failed', {
+      errorCategory: 'domain',
+      origin: 'payment_handler',
+      finality: 'retryable',
+      errorMessage: error.message
+    });
     return { charge: 0, distance: null, withinFreeRadius: true, message: null };
   }
 };
@@ -296,7 +301,12 @@ async function handleInitiateOnlinePayment(phone, customer, state, confirmationR
       { upsert: true }
     );
   } catch (statsErr) {
-    console.error('Error tracking today orders:', statsErr.message);
+    logger.error('daily_order_stats_tracking_failed', {
+      errorCategory: 'domain',
+      origin: 'domain',
+      finality: 'retryable',
+      errorMessage: statsErr.message
+    });
   }
 
   const dataEvents = require('../eventEmitter');
@@ -304,7 +314,12 @@ async function handleInitiateOnlinePayment(phone, customer, state, confirmationR
   dataEvents.emit('dashboard');
 
   const googleSheets = require('../googleSheets');
-  googleSheets.addOrder(order).catch(err => console.error('Google Sheets sync error:', err));
+  googleSheets.addOrder(order).catch(err => logger.error('google_sheets_order_sync_failed', {
+    errorCategory: 'provider',
+    origin: 'domain',
+    finality: 'retryable',
+    errorMessage: err.message
+  }));
 
   try {
     const User = require('../../models/User');
@@ -322,7 +337,12 @@ async function handleInitiateOnlinePayment(phone, customer, state, confirmationR
       }
     }
   } catch (pushErr) {
-    console.error('Admin push error:', pushErr.message);
+    logger.error('admin_push_notification_failed', {
+      errorCategory: 'provider',
+      origin: 'domain',
+      finality: 'retryable',
+      errorMessage: pushErr.message
+    });
   }
 
   freshCustomer.cart = [];
@@ -346,7 +366,13 @@ async function handleInitiateOnlinePayment(phone, customer, state, confirmationR
     
     return { success: true };
   } catch (err) {
-    console.error('Payment page error:', err);
+    logger.error('payment_page_creation_failed', {
+      errorCategory: 'provider',
+      origin: 'payment_handler',
+      finality: 'retryable',
+      orderId,
+      errorMessage: err.message
+    });
     await whatsapp.sendButtons(phone,
       `✅ *Order Created!*\n\nOrder ID: ${orderId}\nTotal: ₹${total}\n\n⚠️ Payment link unavailable.\nPlease contact us.`,
       [
@@ -461,7 +487,12 @@ async function handleInitiateCOD(phone, customer, state, correlationId = null, m
       { upsert: true }
     );
   } catch (statsErr) {
-    console.error('Error tracking today orders:', statsErr.message);
+    logger.error('daily_order_stats_tracking_failed', {
+      errorCategory: 'domain',
+      origin: 'domain',
+      finality: 'retryable',
+      errorMessage: statsErr.message
+    });
   }
 
   const dataEvents = require('../eventEmitter');
@@ -469,7 +500,12 @@ async function handleInitiateCOD(phone, customer, state, correlationId = null, m
   dataEvents.emit('dashboard');
 
   const googleSheets = require('../googleSheets');
-  googleSheets.addOrder(order).catch(err => console.error('Google Sheets sync error:', err));
+  googleSheets.addOrder(order).catch(err => logger.error('google_sheets_order_sync_failed', {
+    errorCategory: 'provider',
+    origin: 'domain',
+    finality: 'retryable',
+    errorMessage: err.message
+  }));
 
   freshCustomer.cart = [];
   freshCustomer.orderHistory = freshCustomer.orderHistory || [];

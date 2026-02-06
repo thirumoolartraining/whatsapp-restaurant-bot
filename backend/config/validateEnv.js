@@ -1,4 +1,7 @@
 const envSchema = require('./envSchema');
+const Logger = require('../services/logger');
+
+const logger = new Logger('validateEnv');
 
 function validateEnv() {
   const errors = [];
@@ -19,7 +22,13 @@ function validateEnv() {
   // If there are validation errors, throw an error
   if (errors.length > 0) {
     const errorMessage = `Missing or invalid environment variables:\n${errors.join('\n')}`;
-    console.error('Configuration Error:', errorMessage);
+    logger.error('environment_validation_failed', {
+      errorCategory: 'configuration',
+      origin: 'validate_env',
+      finality: 'terminal',
+      errorMessage,
+      missingVariables: errors
+    });
     throw new Error(errorMessage);
   }
 

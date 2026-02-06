@@ -16,6 +16,14 @@ async function processInboundMessage({ provider, payload, reqId }) {
   // Generate correlation ID for this message processing flow
   const correlationId = logger.generateCorrelationId();
   
+  logger.info('message_processor_entry', {
+    level: 'info',
+    component: 'messageProcessor',
+    event: 'message_processor_entry',
+    timestamp: new Date().toISOString(),
+    context: { correlationId, provider, reqId }
+  });
+  
   // Normalize inbound Meta payload
   const normalizedMessage = {
     provider: "meta",
@@ -67,6 +75,15 @@ async function processInboundMessage({ provider, payload, reqId }) {
           fromPhone: normalizedMessage.fromPhone,
           correlationId
         });
+        
+        logger.info('message_processor_exit', {
+          level: 'info',
+          component: 'messageProcessor',
+          event: 'message_processor_exit',
+          timestamp: new Date().toISOString(),
+          context: { correlationId, outcome: 'success', reason: 'duplicate_ignored' }
+        });
+        
         return; // Exit gracefully for duplicate
       }
       throw error;
@@ -74,7 +91,7 @@ async function processInboundMessage({ provider, payload, reqId }) {
 
     // New message - continue normal processing
     try {
-      return chatbotRouter.routeMessage(
+      const result = await chatbotRouter.routeMessage(
         payload.phone,
         payload.text,
         payload.messageType,
@@ -83,15 +100,43 @@ async function processInboundMessage({ provider, payload, reqId }) {
         correlationId,
         normalizedMessage.providerMessageId
       );
+      
+      logger.info('message_processor_exit', {
+        level: 'info',
+        component: 'messageProcessor',
+        event: 'message_processor_exit',
+        timestamp: new Date().toISOString(),
+        context: { correlationId, outcome: 'success', reason: 'message_routed' }
+      });
+      
+      return result;
     } catch (error) {
       // Log error before rethrowing to global error handler
       logger.logError(error, 'messageProcessor', null, null, correlationId, normalizedMessage.providerMessageId);
+      
+      logger.info('message_processor_exit', {
+        level: 'info',
+        component: 'messageProcessor',
+        event: 'message_processor_exit',
+        timestamp: new Date().toISOString(),
+        context: { correlationId, outcome: 'failed', reason: 'routing_error' }
+      });
+      
       throw error;
     }
 
   } catch (error) {
     // Log error before rethrowing to global error handler
     logger.logError(error, 'messageProcessor', null, null, correlationId, normalizedMessage.providerMessageId);
+    
+    logger.info('message_processor_exit', {
+      level: 'info',
+      component: 'messageProcessor',
+      event: 'message_processor_exit',
+      timestamp: new Date().toISOString(),
+      context: { correlationId, outcome: 'failed', reason: 'processing_error' }
+    });
+    
     throw error;
   }
 }

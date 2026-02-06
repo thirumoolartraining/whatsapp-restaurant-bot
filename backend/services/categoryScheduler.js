@@ -1,6 +1,9 @@
 const Category = require('../models/Category');
 const MenuItem = require('../models/MenuItem');
 const cron = require('node-cron');
+const Logger = require('./logger');
+
+const logger = new Logger('categoryScheduler');
 
 class CategoryScheduler {
   constructor() {
@@ -58,18 +61,15 @@ class CategoryScheduler {
       const todaySchedule = schedule.customDays.find(d => d.day === currentDay);
       
       if (!todaySchedule || !todaySchedule.enabled) {
-        console.log(`[Category Scheduler] Not scheduled for today (day ${currentDay}) or day disabled`);
         return false; // Not scheduled for today or day is disabled
       }
       
       startTime = todaySchedule.startTime;
       endTime = todaySchedule.endTime;
-      console.log(`[Category Scheduler] Custom day schedule for day ${currentDay}: ${startTime} - ${endTime}`);
     }
     // Backward compatibility: custom type with days array (same time for all days)
     else if (schedule.type === 'custom' && schedule.days && schedule.days.length > 0) {
       if (!schedule.days.includes(currentDay)) {
-        console.log(`[Category Scheduler] Not scheduled for today (day ${currentDay})`);
         return false; // Not scheduled for today
       }
       startTime = schedule.startTime;
@@ -92,19 +92,15 @@ class CategoryScheduler {
     const startMinutes = startHour * 60 + startMin;
     const endMinutes = endHour * 60 + endMin;
 
-    console.log(`[Category Scheduler] Time check (${timezone}): Current=${currentTime} (${currentMinutes} min), Start=${startTime} (${startMinutes} min), End=${endTime} (${endMinutes} min)`);
-
     // Handle overnight schedules (e.g., 22:00 to 02:00)
     if (endMinutes < startMinutes) {
       const isWithin = currentMinutes >= startMinutes || currentMinutes < endMinutes;
-      console.log(`[Category Scheduler] Overnight schedule: ${isWithin ? 'WITHIN' : 'OUTSIDE'} schedule`);
       return isWithin;
     }
 
     // Normal schedule (e.g., 08:00 to 22:00)
     // Use < for end time so that at exactly end time, it's considered outside
     const isWithin = currentMinutes >= startMinutes && currentMinutes < endMinutes;
-    console.log(`[Category Scheduler] Normal schedule: ${isWithin ? 'WITHIN' : 'OUTSIDE'} schedule`);
     return isWithin;
   }
 
@@ -113,30 +109,15 @@ class CategoryScheduler {
     try {
       const category = await Category.findById(categoryId);
       if (!category) {
-        console.log(`[Category Scheduler] Category ${categoryId} not found`);
         return;
       }
 
       if (!category.schedule || !category.schedule.enabled) {
-        console.log(`[Category Scheduler] ${category.name}: Schedule not enabled, skipping`);
         return;
-      }
-
-      console.log(`\n[Category Scheduler] ========== Checking ${category.name} ==========`);
-      console.log(`  Type: ${category.schedule.type}`);
-      if (category.schedule.type === 'custom' && category.schedule.customDays?.length > 0) {
-        console.log(`  Custom Days: ${JSON.stringify(category.schedule.customDays)}`);
-      } else if (category.schedule.type === 'custom') {
-        console.log(`  Days: ${category.schedule.days?.join(', ')} (using global times: ${category.schedule.startTime} to ${category.schedule.endTime})`);
-      } else {
-        console.log(`  Daily Schedule: ${category.schedule.startTime} to ${category.schedule.endTime}`);
       }
 
       const shouldBeActive = this.isWithinSchedule(category.schedule);
       const shouldBePaused = !shouldBeActive;
-
-      console.log(`  Result: Should be ${shouldBeActive ? 'ACTIVE' : 'PAUSED'}`);
-      console.log(`  Current status: ${category.isPaused ? 'PAUSED' : 'ACTIVE'}, isSoldOut: ${category.isSoldOut ? 'YES' : 'NO'}`);
 
       // Only update if status needs to change
       // When within schedule, category should NOT be paused (isPaused = false)
@@ -150,8 +131,14 @@ class CategoryScheduler {
         // Do NOT set isSoldOut - that's for manual sold out action only
         await category.save();
         
-        console.log(`  ✓ STATUS CHANGED: ${oldStatus} → ${newStatus}`);
-        console.log(`[Category Scheduler] ${category.name}: ${shouldBePaused ? '🔒 LOCKED (outside schedule)' : '▶️  RESUMED (within schedule)'}`);
+        logger.info('category_status_changed', {
+          component: 'category_scheduler',
+          event: 'category_status_changed',
+          categoryName: category.name,
+          oldStatus,
+          newStatus,
+          reason: shouldBePaused ? 'outside_schedule' : 'within_schedule'
+        });
         
         // When category RESUMES (becomes active), make all items in this category available
         if (!shouldBePaused) {
@@ -160,17 +147,23 @@ class CategoryScheduler {
             { $set: { available: true } }
           );
           if (updateResult.modifiedCount > 0) {
-            console.log(`  ✓ Made ${updateResult.modifiedCount} item(s) available in ${category.name}`);
-          } else {
-            console.log(`  ℹ️  All items in ${category.name} already available`);
+            logger.info('items_made_available', {
+              component: 'category_scheduler',
+              event: 'items_made_available',
+              categoryName: category.name,
+              count: updateResult.modifiedCount
+            });
           }
         }
-      } else {
-        console.log(`  ℹ️  No change needed (already ${category.isPaused ? 'paused' : 'active'})`);
       }
-      console.log(`[Category Scheduler] ========================================\n`);
     } catch (error) {
-      console.error(`[Category Scheduler] Error updating category ${categoryId}:`, error.message);
+      logger.error('category_status_update_failed', {
+        errorCategory: 'domain',
+        origin: 'category_scheduler',
+        finality: 'retryable',
+        categoryId,
+        errorMessage: error.message
+      });
     }
   }
 
@@ -188,9 +181,6 @@ class CategoryScheduler {
     const currentMinutes = currentHours * 60 + currentMins;
     const endMinutes = endHour * 60 + endMin;
     
-    const currentTime = `${currentHours.toString().padStart(2, '0')}:${currentMins.toString().padStart(2, '0')}`;
-    console.log(`[Category Scheduler] Sold out check (${timezone}): Current=${currentTime} (${currentMinutes} min), End=${soldOutSchedule.endTime} (${endMinutes} min)`);
-    
     // Check if current time has passed the end time
     return currentMinutes >= endMinutes;
   }
@@ -200,7 +190,6 @@ class CategoryScheduler {
     try {
       const category = await Category.findById(categoryId);
       if (!category) {
-        console.log(`[Category Scheduler] Category ${categoryId} not found`);
         return;
       }
 
@@ -208,37 +197,42 @@ class CategoryScheduler {
         return;
       }
 
-      console.log(`\n[Category Scheduler] ========== Checking Sold Out for ${category.name} ==========`);
-      console.log(`  Sold out until: ${category.soldOutSchedule.endTime}`);
-
       const isExpired = this.isSoldOutExpired(category.soldOutSchedule);
       
       if (isExpired) {
-        console.log(`  ✓ Sold out period EXPIRED - resuming category`);
-        
         category.isSoldOut = false;
         category.soldOutSchedule.enabled = false;
-        category.soldOutSchedule.endTime = null;
         await category.save();
         
-        // When category RESUMES (sold out expires), make all items in this category available
+        logger.info('sold_out_expired', {
+          component: 'category_scheduler',
+          event: 'sold_out_expired',
+          categoryName: category.name
+        });
+        
+        // Make all items available again
         const updateResult = await MenuItem.updateMany(
           { category: category.name, available: false },
           { $set: { available: true } }
         );
         
-        console.log(`[Category Scheduler] ${category.name}: ▶️  RESUMED (sold out expired)`);
         if (updateResult.modifiedCount > 0) {
-          console.log(`  ✓ Made ${updateResult.modifiedCount} item(s) available in ${category.name}`);
-        } else {
-          console.log(`  ℹ️  All items in ${category.name} already available`);
+          logger.info('items_made_available_after_sold_out', {
+            component: 'category_scheduler',
+            event: 'items_made_available_after_sold_out',
+            categoryName: category.name,
+            count: updateResult.modifiedCount
+          });
         }
-      } else {
-        console.log(`  ℹ️  Still sold out until ${category.soldOutSchedule.endTime}`);
       }
-      console.log(`[Category Scheduler] ========================================\n`);
     } catch (error) {
-      console.error(`[Category Scheduler] Error updating sold out status ${categoryId}:`, error.message);
+      logger.error('sold_out_status_update_failed', {
+        errorCategory: 'domain',
+        origin: 'category_scheduler',
+        finality: 'retryable',
+        categoryId,
+        errorMessage: error.message
+      });
     }
   }
 
@@ -250,13 +244,22 @@ class CategoryScheduler {
       const currentTime = `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}`;
       const currentDay = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][dayNumber];
       
-      console.log(`\n[Category Scheduler] ⏰ Running check at ${currentTime} IST (${currentDay})`);
+      logger.info('running_check', {
+        component: 'category_scheduler',
+        event: 'running_check',
+        time: currentTime,
+        day: currentDay
+      });
       
       // Check availability schedules
       const categoriesWithSchedule = await Category.find({ 'schedule.enabled': true });
       
       if (categoriesWithSchedule.length > 0) {
-        console.log(`[Category Scheduler] Found ${categoriesWithSchedule.length} category(ies) with availability schedules`);
+        logger.info('found_categories_with_schedules', {
+          component: 'category_scheduler',
+          event: 'found_categories_with_schedules',
+          count: categoriesWithSchedule.length
+        });
         for (const category of categoriesWithSchedule) {
           await this.updateCategoryStatus(category._id);
         }
@@ -266,21 +269,33 @@ class CategoryScheduler {
       const categoriesWithSoldOut = await Category.find({ 'soldOutSchedule.enabled': true });
       
       if (categoriesWithSoldOut.length > 0) {
-        console.log(`[Category Scheduler] Found ${categoriesWithSoldOut.length} category(ies) with sold out schedules`);
+        logger.info('found_categories_with_sold_out', {
+          component: 'category_scheduler',
+          event: 'found_categories_with_sold_out',
+          count: categoriesWithSoldOut.length
+        });
         for (const category of categoriesWithSoldOut) {
           await this.updateSoldOutStatus(category._id);
         }
       }
       
       if (categoriesWithSchedule.length === 0 && categoriesWithSoldOut.length === 0) {
-        console.log('[Category Scheduler] No categories with schedules enabled');
+        logger.info('no_categories_with_schedules', {
+          component: 'category_scheduler',
+          event: 'no_categories_with_schedules'
+        });
       }
     } catch (error) {
-      console.error('[Category Scheduler] Error checking schedules:', error.message);
+      logger.error('checking_schedules_failed', {
+        errorCategory: 'domain',
+        origin: 'category_scheduler',
+        finality: 'retryable',
+        errorMessage: error.message
+      });
     }
   }
 
-  // Start the scheduler (runs every minute)
+  // Start the scheduler
   start() {
     // Run immediately on start
     this.checkAllSchedules();
@@ -290,14 +305,20 @@ class CategoryScheduler {
       this.checkAllSchedules();
     });
 
-    console.log('[Category Scheduler] Started - checking schedules every minute');
+    logger.info('scheduler_started', {
+      component: 'category_scheduler',
+      event: 'scheduler_started'
+    });
   }
 
   // Stop the scheduler
   stop() {
     if (this.job) {
       this.job.stop();
-      console.log('[Category Scheduler] Stopped');
+      logger.info('scheduler_stopped', {
+        component: 'category_scheduler',
+        event: 'scheduler_stopped'
+      });
     }
   }
 }

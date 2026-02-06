@@ -1,5 +1,8 @@
 // Cloudinary Service - Image Upload & Optimization
 const cloudinary = require('cloudinary').v2;
+const Logger = require('./logger');
+
+const logger = new Logger('cloudinary');
 
 // Configure Cloudinary
 cloudinary.config({
@@ -32,10 +35,14 @@ const cloudinaryService = {
       }
 
       const result = await cloudinary.uploader.upload(imageUrl, options);
-      console.log('✅ Cloudinary upload success:', result.secure_url);
       return result.secure_url;
     } catch (error) {
-      console.error('❌ Cloudinary upload error:', error.message);
+      logger.error('cloudinary_upload_failed', {
+        errorCategory: 'provider',
+        origin: 'cloudinary',
+        finality: 'retryable',
+        errorMessage: error.message
+      });
       throw error;
     }
   },
@@ -64,10 +71,14 @@ const cloudinaryService = {
 
       const uploadStream = cloudinary.uploader.upload_stream(options, (error, result) => {
         if (error) {
-          console.error('❌ Cloudinary buffer upload error:', error.message);
+          logger.error('cloudinary_buffer_upload_failed', {
+            errorCategory: 'provider',
+            origin: 'cloudinary',
+            finality: 'retryable',
+            errorMessage: error.message
+          });
           reject(error);
         } else {
-          console.log('✅ Cloudinary buffer upload success:', result.secure_url);
           resolve(result.secure_url);
         }
       });
@@ -100,10 +111,14 @@ const cloudinaryService = {
 
       const uploadStream = cloudinary.uploader.upload_stream(options, (error, result) => {
         if (error) {
-          console.error('❌ Cloudinary buffer upload error:', error.message);
+          logger.error('cloudinary_buffer_upload_failed', {
+            errorCategory: 'provider',
+            origin: 'cloudinary',
+            finality: 'retryable',
+            errorMessage: error.message
+          });
           reject(error);
         } else {
-          console.log('✅ Cloudinary buffer upload success:', result.secure_url);
           resolve(result.secure_url);
         }
       });
@@ -145,7 +160,6 @@ const cloudinaryService = {
     // For external URLs, use Cloudinary fetch (on-the-fly transformation)
     const cloudName = process.env.CLOUDINARY_CLOUD_NAME;
     if (!cloudName) {
-      console.warn('⚠️ CLOUDINARY_CLOUD_NAME not set, returning original URL');
       return imageUrl;
     }
 
@@ -160,10 +174,15 @@ const cloudinaryService = {
   async deleteImage(publicId) {
     try {
       const result = await cloudinary.uploader.destroy(publicId);
-      console.log('✅ Cloudinary delete:', publicId, result);
       return result;
     } catch (error) {
-      console.error('❌ Cloudinary delete error:', error.message);
+      logger.error('cloudinary_delete_failed', {
+        errorCategory: 'provider',
+        origin: 'cloudinary',
+        finality: 'retryable',
+        publicId,
+        errorMessage: error.message
+      });
       throw error;
     }
   },
@@ -204,10 +223,14 @@ const cloudinaryService = {
       const fullPath = cleanSegments.join('/');
       const publicId = fullPath.replace(/\.[^/.]+$/, ''); // Remove extension
       
-      console.log('📍 Extracted publicId:', publicId, 'from URL:', cloudinaryUrl);
       return publicId;
     } catch (error) {
-      console.error('❌ Error extracting publicId:', error.message);
+      logger.error('public_id_extraction_failed', {
+        errorCategory: 'domain',
+        origin: 'cloudinary',
+        finality: 'retryable',
+        errorMessage: error.message
+      });
       return null;
     }
   }

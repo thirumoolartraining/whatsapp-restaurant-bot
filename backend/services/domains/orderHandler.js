@@ -47,7 +47,12 @@ const calculateDeliveryCharge = async (customerLat, customerLon) => {
     // If outside delivery radius, delivery is not available
     return { charge: null, distance: straightLineDistance, available: false };
   } catch (error) {
-    console.error('Error calculating delivery charge:', error);
+    logger.error('delivery_charge_calculation_failed', {
+      errorCategory: 'domain',
+      origin: 'domain',
+      finality: 'retryable',
+      errorMessage: error.message
+    });
     return { charge: 0, distance: null };
   }
 };
@@ -191,7 +196,14 @@ const orderHandler = {
     logger.logDomainHandlerExit('order', 'handleOrderSummary', true, 'payment_method_selection', correlationId, messageId);
   } catch (error) {
     logger.logDomainHandlerExit('order', 'handleOrderSummary', false, null, correlationId, messageId);
-    logger.logError(error, 'orderHandler', 'domain_handler', null, correlationId, messageId);
+    logger.error('order_summary_processing_failed', {
+      errorCategory: 'domain',
+      origin: 'domain',
+      finality: 'retryable',
+      errorMessage: error.message,
+      correlationId,
+      messageId
+    });
     throw error;
   }
 },
@@ -389,7 +401,12 @@ const orderHandler = {
       await whatsapp.sendMessage(phone, msg);
       return { success: true, orderId };
     } catch (error) {
-      console.error('Error processing pickup checkout:', error);
+      logger.error('pickup_checkout_processing_failed', {
+        errorCategory: 'domain',
+        origin: 'domain',
+        finality: 'retryable',
+        errorMessage: error.message
+      });
       await whatsapp.sendMessage(phone, '❌ Failed to process your pickup order. Please try again.');
       return { success: false };
     }

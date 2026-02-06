@@ -137,7 +137,12 @@ const reverseGeocode = async (latitude, longitude) => {
     }
     return 'Location shared';
   } catch (error) {
-    console.error('Reverse geocoding error:', error.message);
+    logger.error('reverse_geocoding_failed', {
+      errorCategory: 'provider',
+      origin: 'domain',
+      finality: 'retryable',
+      errorMessage: error.message
+    });
     return 'Location shared';
   }
 };
@@ -159,7 +164,14 @@ const handleServiceTypeSelection = async (phone, correlationId = null, messageId
     logger.logDomainHandlerExit('location', 'handleServiceTypeSelection', true, 'service_type_selection', correlationId, messageId);
   } catch (error) {
     logger.logDomainHandlerExit('location', 'handleServiceTypeSelection', false, null, correlationId, messageId);
-    logger.logError(error, 'locationHandler', 'domain_handler', null, correlationId, messageId);
+    logger.error('service_type_selection_failed', {
+      errorCategory: 'domain',
+      origin: 'domain',
+      finality: 'retryable',
+      errorMessage: error.message,
+      correlationId,
+      messageId
+    });
     throw error;
   }
 };
@@ -261,7 +273,14 @@ const handleLocationMessage = async (phone, message, customer, state, correlatio
   return { handled: true, shouldReturn: false };
   } catch (error) {
     logger.logDomainHandlerExit('location', 'handleLocationMessage', false, null, correlationId, messageId);
-    logger.logError(error, 'locationHandler', 'domain_handler', null, correlationId, messageId);
+    logger.error('location_message_processing_failed', {
+      errorCategory: 'domain',
+      origin: 'domain',
+      finality: 'retryable',
+      errorMessage: error.message,
+      correlationId,
+      messageId
+    });
     throw error;
   }
 };
@@ -279,7 +298,14 @@ const handleAddressCapture = async (phone, correlationId = null, messageId = nul
     logger.logDomainHandlerExit('location', 'handleAddressCapture', true, 'location_requested', correlationId, messageId);
   } catch (error) {
     logger.logDomainHandlerExit('location', 'handleAddressCapture', false, null, correlationId, messageId);
-    logger.logError(error, 'locationHandler', 'domain_handler', null, correlationId, messageId);
+    logger.error('address_capture_failed', {
+      errorCategory: 'domain',
+      origin: 'domain',
+      finality: 'retryable',
+      errorMessage: error.message,
+      correlationId,
+      messageId
+    });
     throw error;
   }
 };

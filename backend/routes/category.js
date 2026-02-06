@@ -6,7 +6,10 @@ const authorize = require('../middleware/authorize');
 const cloudinaryService = require('../services/cloudinary');
 const dataEvents = require('../services/eventEmitter');
 const multer = require('multer');
+const Logger = require('../services/logger');
 const router = express.Router();
+
+const logger = new Logger('category');
 
 // Configure multer for memory storage
 const upload = multer({
@@ -87,11 +90,14 @@ router.put('/:id', authenticate, authorize(['admin']), upload.single('image'), a
           const publicId = cloudinaryService.extractPublicId(existingCategory.image);
           if (publicId) await cloudinaryService.deleteImage(publicId);
         } catch (e) {
-          console.log('Could not delete old image:', e.message);
+          logger.error('old_category_image_deletion_failed', {
+            errorCategory: 'provider',
+            origin: 'category',
+            finality: 'retryable',
+            errorMessage: e.message
+          });
         }
       }
-      imageUrl = null;
-    }
     // If new file uploaded, upload to Cloudinary
     else if (req.file) {
       if (existingCategory?.image && existingCategory.image.includes('cloudinary.com')) {
@@ -99,11 +105,15 @@ router.put('/:id', authenticate, authorize(['admin']), upload.single('image'), a
           const publicId = cloudinaryService.extractPublicId(existingCategory.image);
           if (publicId) await cloudinaryService.deleteImage(publicId);
         } catch (e) {
-          console.log('Could not delete old image:', e.message);
+          logger.error('old_category_image_deletion_failed', {
+            errorCategory: 'provider',
+            origin: 'category',
+            finality: 'retryable',
+            errorMessage: e.message
+          });
         }
+        imageUrl = await cloudinaryService.uploadFromBuffer(req.file.buffer, 'restaurant-bot/categories');
       }
-      imageUrl = await cloudinaryService.uploadFromBuffer(req.file.buffer, 'restaurant-bot/categories');
-    }
     // If image URL provided (for backward compatibility)
     else if (image && image !== existingCategory?.image) {
       imageUrl = image;
@@ -148,15 +158,12 @@ router.patch('/:id/schedule', authenticate, authorize(['admin']), async (req, re
   try {
     const { enabled, type, startTime, endTime, days, customDays } = req.body;
     
-    console.log(`[Schedule API] Updating schedule for category ${req.params.id}`);
-    console.log(`[Schedule API] Data:`, { enabled, type, startTime, endTime, days, customDays });
     
     const category = await Category.findById(req.params.id);
     if (!category) {
       return res.status(404).json({ error: 'Category not found' });
     }
 
-    console.log(`[Schedule API] Category: ${category.name}, Current isPaused: ${category.isPaused}`);
 
     // Update schedule
     category.schedule = {
@@ -170,24 +177,25 @@ router.patch('/:id/schedule', authenticate, authorize(['admin']), async (req, re
     };
 
     await category.save();
-    console.log(`[Schedule API] Schedule saved to database`);
 
     // Immediately check if category should be paused based on new schedule
     if (enabled) {
-      console.log(`[Schedule API] Running scheduler to update category status...`);
       const categoryScheduler = require('../services/categoryScheduler');
       
       try {
         await categoryScheduler.updateCategoryStatus(category._id);
-        console.log(`[Schedule API] Scheduler completed successfully`);
-      } catch (schedulerError) {
-        console.error(`[Schedule API] Scheduler error:`, schedulerError);
+        } catch (schedulerError) {
+        logger.error('category_scheduler_failed', {
+          errorCategory: 'provider',
+          origin: 'category',
+          finality: 'retryable',
+          categoryId: category._id,
+          errorMessage: schedulerError.message
+        });
       }
       
       // Fetch fresh data after scheduler update
       const updatedCategory = await Category.findById(category._id);
-      console.log(`[Schedule API] After scheduler: isPaused = ${updatedCategory.isPaused}`);
-      console.log(`[Schedule API] Returning updated category to client`);
       
       // Emit event for real-time updates
       dataEvents.emit('menu');
@@ -195,12 +203,9 @@ router.patch('/:id/schedule', authenticate, authorize(['admin']), async (req, re
       return res.json(updatedCategory);
     } else {
       // Schedule disabled - unpause category and make all items available
-      console.log(`[Schedule API] Schedule disabled - unpausing category and making items available`);
-      console.log(`[Schedule API] Category ${category.name} was isPaused: ${category.isPaused}, isSoldOut: ${category.isSoldOut}`);
       
       category.isPaused = false;
       await category.save();
-      console.log(`[Schedule API] Category ${category.name} isPaused set to: false`);
       
       // Make all items in this category available
       const MenuItem = require('../models/MenuItem');
@@ -210,14 +215,10 @@ router.patch('/:id/schedule', authenticate, authorize(['admin']), async (req, re
       );
       
       if (updateResult.modifiedCount > 0) {
-        console.log(`[Schedule API] Made ${updateResult.modifiedCount} item(s) available in ${category.name}`);
-      } else {
-        console.log(`[Schedule API] No items needed availability update in ${category.name}`);
       }
       
       // Fetch fresh data
       const updatedCategory = await Category.findById(category._id);
-      console.log(`[Schedule API] Returning category with isPaused: ${updatedCategory.isPaused}`);
       
       // Emit event for real-time updates
       dataEvents.emit('menu');
@@ -225,7 +226,12 @@ router.patch('/:id/schedule', authenticate, authorize(['admin']), async (req, re
       return res.json(updatedCategory);
     }
   } catch (error) {
-    console.error('[Schedule API] Error:', error);
+    logger.error('category_schedule_update_failed', {
+      errorCategory: 'domain',
+      origin: 'category',
+      finality: 'terminal',
+      errorMessage: error.message
+    });
     res.status(500).json({ error: error.message });
   }
 });
@@ -257,14 +263,14 @@ router.patch('/:id/toggle-soldout', authenticate, authorize(['admin']), async (r
         { category: category.name },
         { $set: { available: false } }
       );
-      console.log(`[Category] "${category.name}" marked SOLD OUT - ${result.modifiedCount} item(s) marked out of stock`);
+      
     } else {
       // Mark all items in this category as available
       const result = await MenuItem.updateMany(
         { category: category.name },
         { $set: { available: true } }
       );
-      console.log(`[Category] "${category.name}" RESUMED - ${result.modifiedCount} item(s) marked available`);
+      
     }
     
     // Emit event for real-time updates
@@ -283,8 +289,6 @@ router.patch('/:id/schedule-soldout', authenticate, authorize(['admin']), async 
   try {
     const { enabled, endTime } = req.body;
     
-    console.log(`[SoldOut Schedule API] Updating sold out schedule for category ${req.params.id}`);
-    console.log(`[SoldOut Schedule API] Data:`, { enabled, endTime });
     
     const category = await Category.findById(req.params.id);
     if (!category) {
@@ -307,8 +311,6 @@ router.patch('/:id/schedule-soldout', authenticate, authorize(['admin']), async 
         { category: category.name },
         { $set: { available: false } }
       );
-      console.log(`[Category] "${category.name}" scheduled SOLD OUT until ${endTime} - ${result.modifiedCount} item(s) marked out of stock`);
-    }
     
     await category.save();
     
@@ -317,7 +319,12 @@ router.patch('/:id/schedule-soldout', authenticate, authorize(['admin']), async 
     
     res.json(category);
   } catch (error) {
-    console.error('[SoldOut Schedule API] Error:', error);
+    logger.error('category_soldout_schedule_failed', {
+      errorCategory: 'domain',
+      origin: 'category',
+      finality: 'terminal',
+      errorMessage: error.message
+    });
     res.status(500).json({ error: error.message });
   }
 });
@@ -339,7 +346,12 @@ router.delete('/:id', authenticate, authorize(['admin']), async (req, res) => {
         const publicId = cloudinaryService.extractPublicId(category.image);
         if (publicId) await cloudinaryService.deleteImage(publicId);
       } catch (e) {
-        console.log('Could not delete category image:', e.message);
+        logger.error('category_image_deletion_failed', {
+          errorCategory: 'provider',
+          origin: 'category',
+          finality: 'retryable',
+          errorMessage: e.message
+        });
       }
     }
 
@@ -358,7 +370,12 @@ router.delete('/:id', authenticate, authorize(['admin']), async (req, res) => {
             const publicId = cloudinaryService.extractPublicId(item.image);
             if (publicId) await cloudinaryService.deleteImage(publicId);
           } catch (e) {
-            console.log('Could not delete item image:', e.message);
+            logger.error('menu_item_image_deletion_failed', {
+              errorCategory: 'provider',
+              origin: 'category',
+              finality: 'retryable',
+              errorMessage: e.message
+            });
           }
         }
         await MenuItem.findByIdAndDelete(item._id);

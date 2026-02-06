@@ -7,7 +7,10 @@ const metaCloud = require('../services/metaCloud');
 const groqAi = require('../services/groqAi');
 const metaSignatureVerify = require('../middleware/metaSignatureVerify');
 const { webhookLimiter } = require('../middleware/rateLimit');
+const Logger = require('../services/logger');
 const router = express.Router();
+
+const logger = new Logger('webhook');
 
 // Raw body capture middleware for signature verification
 router.use('/meta', express.raw({ type: 'application/json' }), (req, res, next) => {
@@ -23,6 +26,16 @@ router.use('/meta', express.raw({ type: 'application/json' }), (req, res, next) 
 
 // Test Google Sheets connection
 router.get('/test-sheets', async (req, res) => {
+  const correlationId = logger.generateCorrelationId();
+  
+  logger.info('test_sheets_entry', {
+    level: 'info',
+    component: 'webhook',
+    event: 'test_sheets_entry',
+    timestamp: new Date().toISOString(),
+    context: { correlationId }
+  });
+  
   try {
     const testOrder = {
       orderId: 'TEST' + Date.now(),
@@ -36,22 +49,75 @@ router.get('/test-sheets', async (req, res) => {
       deliveryAddress: { address: 'Test Address', latitude: 0, longitude: 0 }
     };
 
+    logger.info('test_sheets_exit', {
+      level: 'info',
+      component: 'webhook',
+      event: 'test_sheets_exit',
+      timestamp: new Date().toISOString(),
+      context: { correlationId, outcome: 'success', reason: 'test_completed' }
+    });
+    
     const result = await googleSheets.addOrder(testOrder);
     res.json({ success: result, message: result ? 'Test order added to Google Sheet!' : 'Failed to add order' });
   } catch (error) {
-    console.error('Google Sheets test error:', error);
+    logger.info('test_sheets_exit', {
+      level: 'info',
+      component: 'webhook',
+      event: 'test_sheets_exit',
+      timestamp: new Date().toISOString(),
+      context: { correlationId, outcome: 'failed', reason: 'google_sheets_error' }
+    });
+    
+    logger.error('google_sheets_test_failed', {
+      errorCategory: 'provider',
+      origin: 'google_sheets',
+      finality: 'terminal',
+      errorMessage: error.message
+    });
     res.status(500).json({ success: false, error: error.message });
   }
 });
 
 // Test endpoint - send a test message
 router.get('/test/:phone', async (req, res) => {
+  const { phone } = req.params;
+  const correlationId = logger.generateCorrelationId();
+  
+  logger.info('test_message_entry', {
+    level: 'info',
+    component: 'webhook',
+    event: 'test_message_entry',
+    timestamp: new Date().toISOString(),
+    context: { correlationId, phone }
+  });
+  
   try {
-    const { phone } = req.params;
+    logger.info('test_message_exit', {
+      level: 'info',
+      component: 'webhook',
+      event: 'test_message_exit',
+      timestamp: new Date().toISOString(),
+      context: { correlationId, phone, outcome: 'success', reason: 'message_sent' }
+    });
+    
     await whatsapp.sendMessage(phone, '✅ Test message from your Restaurant Bot!');
     res.json({ success: true, message: 'Test message sent to ' + phone });
   } catch (error) {
-    console.error('Test error:', error);
+    logger.info('test_message_exit', {
+      level: 'info',
+      component: 'webhook',
+      event: 'test_message_exit',
+      timestamp: new Date().toISOString(),
+      context: { correlationId, phone, outcome: 'failed', reason: 'whatsapp_error' }
+    });
+    
+    logger.error('test_message_failed', {
+      errorCategory: 'provider',
+      origin: 'whatsapp',
+      finality: 'terminal',
+      phone,
+      errorMessage: error.message
+    });
     res.status(500).json({ success: false, error: error.message });
   }
 });
@@ -73,7 +139,13 @@ router.get('/test-menu/:phone', async (req, res) => {
     });
     res.json({ success: true, message: 'Welcome menu sent to ' + phone });
   } catch (error) {
-    console.error('Test menu error:', error);
+    logger.error('test_menu_failed', {
+      errorCategory: 'provider',
+      origin: 'message_processor',
+      finality: 'terminal',
+      phone,
+      errorMessage: error.message
+    });
     res.status(500).json({ success: false, error: error.message });
   }
 });
@@ -83,7 +155,13 @@ router.post('/simulate', async (req, res) => {
   try {
     const { phone, message, selectedId } = req.body;
     const messageType = selectedId ? 'list' : 'text';
-    console.log('🧪 Simulating message:', { phone, message, messageType, selectedId });
+    logger.info('message_simulated', {
+      level: 'info',
+      component: 'webhook',
+      event: 'message_simulated',
+      timestamp: new Date().toISOString(),
+      context: { phone, message, messageType, selectedId }
+    });
     await messageProcessor.processInboundMessage({
       provider: 'meta',
       payload: {
@@ -97,7 +175,13 @@ router.post('/simulate', async (req, res) => {
     });
     res.json({ success: true, message: 'Simulated message processed' });
   } catch (error) {
-    console.error('Simulate error:', error);
+    logger.error('simulate_message_failed', {
+      errorCategory: 'provider',
+      origin: 'message_processor',
+      finality: 'terminal',
+      phone,
+      errorMessage: error.message
+    });
     res.status(500).json({ success: false, error: error.message });
   }
 });
@@ -116,6 +200,13 @@ router.get('/debug/:phone', async (req, res) => {
       conversationState: customer.conversationState
     });
   } catch (error) {
+    logger.error('debug_customer_failed', {
+      errorCategory: 'validation',
+      origin: 'database',
+      finality: 'terminal',
+      phone: req.params.phone,
+      errorMessage: error.message
+    });
     res.status(500).json({ error: error.message });
   }
 });
@@ -134,24 +225,57 @@ router.get('/meta', (req, res) => {
   // Verify token should match what you set in Meta dashboard
   const verifyToken = process.env.META_VERIFY_TOKEN || 'restaurant_bot_verify';
 
-  console.log('🔐 Webhook verification attempt:', { mode, token, expectedToken: verifyToken, challenge: challenge ? 'present' : 'missing' });
+  logger.info('webhook_verification_attempt', {
+    level: 'info',
+    component: 'webhook',
+    event: 'webhook_verification_attempt',
+    timestamp: new Date().toISOString(),
+    context: { mode, token, expectedToken: verifyToken, challenge: challenge ? 'present' : 'missing' }
+  });
 
   if (mode === 'subscribe' && token === verifyToken) {
-    console.log('✅ Meta webhook verified');
+    logger.info('webhook_verified', {
+      level: 'info',
+      component: 'webhook',
+      event: 'webhook_verified',
+      timestamp: new Date().toISOString(),
+      context: {}
+    });
     res.status(200).send(challenge);
   } else if (!mode && !token) {
     // Simple health check (no verification params)
     res.json({ status: 'Webhook endpoint active', timestamp: new Date().toISOString() });
   } else {
-    console.log('❌ Meta webhook verification failed - token mismatch');
+    logger.warn('webhook_verification_failed', {
+      level: 'warn',
+      component: 'webhook',
+      event: 'webhook_verification_failed',
+      timestamp: new Date().toISOString(),
+      context: { reason: 'token_mismatch' }
+    });
     res.sendStatus(403);
   }
 });
 
 // Meta WhatsApp Cloud API webhook endpoint
 router.post('/meta', metaSignatureVerify, webhookLimiter, async (req, res) => {
-  console.log('📥 Webhook POST received');
-  console.log('📥 Body:', JSON.stringify(req.body, null, 2));
+  const correlationId = logger.generateCorrelationId();
+  
+  logger.info('webhook_entry', {
+    level: 'info',
+    component: 'webhook',
+    event: 'webhook_entry',
+    timestamp: new Date().toISOString(),
+    context: { correlationId }
+  });
+  
+  logger.info('webhook_received', {
+    level: 'info',
+    component: 'webhook',
+    event: 'webhook_received',
+    timestamp: new Date().toISOString(),
+    context: { body: req.body }
+  });
   
   // 1. Respond to Meta IMMEDIATELY to avoid timeouts (prevents 'single tick' issue)
   res.sendStatus(200);
@@ -210,7 +334,13 @@ router.post('/meta', metaSignatureVerify, webhookLimiter, async (req, res) => {
                 // Handle voice message
                 messageType = 'voice';
                 const audioId = message.audio?.id;
-                console.log('🎤 Voice message received, audio ID:', audioId);
+                logger.info('voice_message_received', {
+                  level: 'info',
+                  component: 'webhook',
+                  event: 'voice_message_received',
+                  timestamp: new Date().toISOString(),
+                  context: { audioId }
+                });
                 
                 if (audioId) {
                   try {
@@ -225,8 +355,13 @@ router.post('/meta', metaSignatureVerify, webhookLimiter, async (req, res) => {
                       
                       text = transcription;
                       messageType = 'text'; // Treat as text after transcription
-                      console.log('🎤 Voice transcribed:', rawTranscription);
-                      console.log('🎤 Normalized to:', text);
+                      logger.info('voice_transcribed', {
+                        level: 'info',
+                        component: 'webhook',
+                        event: 'voice_transcribed',
+                        timestamp: new Date().toISOString(),
+                        context: { rawTranscription, normalizedTranscription: text }
+                      });
                     } else {
                       // Transcription failed, send error message
                       await whatsapp.sendButtons(phone, 
@@ -239,7 +374,14 @@ router.post('/meta', metaSignatureVerify, webhookLimiter, async (req, res) => {
                       continue;
                     }
                   } catch (err) {
-                    console.error('❌ Voice processing error:', err.message);
+                    logger.error('voice_processing_failed', {
+                      errorCategory: 'provider',
+                      origin: 'voice_transcription',
+                      finality: 'retryable',
+                      phone,
+                      audioId,
+                      errorMessage: err.message
+                    });
                     await whatsapp.sendButtons(phone,
                       "🎤 Sorry, I couldn't process your voice message. Please type your message instead.",
                       [
@@ -266,15 +408,42 @@ router.post('/meta', metaSignatureVerify, webhookLimiter, async (req, res) => {
                     message
                   },
                   reqId: `msg_${Date.now()}_${phone}`
-                }).catch(err => console.error('❌ Async Chatbot Error:', err));
+                }).catch(err => logger.error('async_chatbot_error', {
+                  errorCategory: 'unknown',
+                  origin: 'message_processor',
+                  finality: 'terminal',
+                  phone,
+                  errorMessage: err.message
+                }));
               }
             }
           }
         }
       }
     }
+    
+    logger.info('webhook_exit', {
+      level: 'info',
+      component: 'webhook',
+      event: 'webhook_exit',
+      timestamp: new Date().toISOString(),
+      context: { correlationId, outcome: 'success', reason: 'processing_completed' }
+    });
   } catch (error) {
-    console.error('❌ Meta webhook async processing error:', error);
+    logger.info('webhook_exit', {
+      level: 'info',
+      component: 'webhook',
+      event: 'webhook_exit',
+      timestamp: new Date().toISOString(),
+      context: { correlationId, outcome: 'failed', reason: 'processing_error' }
+    });
+    
+    logger.error('webhook_processing_failed', {
+      errorCategory: 'unknown',
+      origin: 'webhook',
+      finality: 'terminal',
+      errorMessage: error.message
+    });
   }
 });
 

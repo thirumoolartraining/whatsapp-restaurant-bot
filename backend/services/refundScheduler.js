@@ -3,13 +3,22 @@ const Order = require('../models/Order');
 const whatsapp = require('./whatsapp');
 const googleSheets = require('./googleSheets');
 const razorpayService = require('./razorpay');
+const Logger = require('./logger');
+
+const logger = new Logger('refundScheduler');
 
 const pendingRefunds = new Map();
 
 const refundScheduler = {
   // Schedule refund to be processed after delay (default 5 minutes)
   scheduleRefund(orderId, delayMs = 5 * 60 * 1000) {
-    console.log(`⏰ Scheduling refund for ${orderId} in ${delayMs / 1000} seconds`);
+    logger.info('refund_scheduled', {
+      level: 'info',
+      component: 'refundScheduler',
+      event: 'refund_scheduled',
+      timestamp: new Date().toISOString(),
+      context: { orderId, delaySeconds: delayMs / 1000 }
+    });
     
     // Cancel any existing scheduled refund for this order
     this.cancelScheduledRefund(orderId);
@@ -27,32 +36,68 @@ const refundScheduler = {
       const order = await Order.findOne({ orderId });
       
       if (!order) {
-        console.log(`❌ Order ${orderId} not found for refund`);
+        logger.warn('refund_order_not_found', {
+          level: 'warn',
+          component: 'refundScheduler',
+          event: 'refund_order_not_found',
+          timestamp: new Date().toISOString(),
+          context: { orderId }
+        });
         return;
       }
       
       // Check if refund should be processed
       if (order.refundStatus === 'completed') {
-        console.log(`⚠️ Order ${orderId} already refunded, skipping`);
+        logger.info('refund_already_completed', {
+          level: 'info',
+          component: 'refundScheduler',
+          event: 'refund_already_completed',
+          timestamp: new Date().toISOString(),
+          context: { orderId }
+        });
         return;
       }
       
       if (order.refundStatus !== 'scheduled' && order.refundStatus !== 'pending') {
-        console.log(`⚠️ Order ${orderId} refund status is ${order.refundStatus}, skipping`);
+        logger.info('refund_status_not_scheduled', {
+          level: 'info',
+          component: 'refundScheduler',
+          event: 'refund_status_not_scheduled',
+          timestamp: new Date().toISOString(),
+          context: { orderId, refundStatus: order.refundStatus }
+        });
         return;
       }
       
       if (order.status !== 'cancelled') {
-        console.log(`⚠️ Order ${orderId} is not cancelled (status: ${order.status}), skipping refund`);
+        logger.info('refund_order_not_cancelled', {
+          level: 'info',
+          component: 'refundScheduler',
+          event: 'refund_order_not_cancelled',
+          timestamp: new Date().toISOString(),
+          context: { orderId, status: order.status }
+        });
         return;
       }
       
       if (!order.razorpayPaymentId) {
-        console.log(`⚠️ Order ${orderId} has no payment ID, skipping refund`);
+        logger.info('refund_no_payment_id', {
+          level: 'info',
+          component: 'refundScheduler',
+          event: 'refund_no_payment_id',
+          timestamp: new Date().toISOString(),
+          context: { orderId }
+        });
         return;
       }
       
-      console.log(`💰 Processing scheduled refund for order ${orderId}`);
+      logger.info('refund_processing_started', {
+        level: 'info',
+        component: 'refundScheduler',
+        event: 'refund_processing_started',
+        timestamp: new Date().toISOString(),
+        context: { orderId }
+      });
       
       try {
         // Process the actual refund via Razorpay
@@ -76,7 +121,13 @@ const refundScheduler = {
         dataEvents.emit('orders');
         dataEvents.emit('dashboard');
         
-        console.log(`✅ Refund completed for order ${orderId}, Refund ID: ${refund.id}`);
+        logger.info('refund_completed', {
+          level: 'info',
+          component: 'refundScheduler',
+          event: 'refund_completed',
+          timestamp: new Date().toISOString(),
+          context: { orderId, refundId: refund.id, amount: order.totalAmount }
+        });
         
         // Send WhatsApp success message
         await this.sendRefundSuccessMessage(order);
@@ -85,11 +136,22 @@ const refundScheduler = {
         try {
           await googleSheets.updateOrderStatus(order.orderId, 'refunded', 'refunded');
         } catch (err) {
-          console.error('Google Sheets sync error:', err.message);
+          logger.error('google_sheets_sync_error', {
+            errorCategory: 'provider',
+            origin: 'google_sheets',
+            finality: 'retryable',
+            errorMessage: err.message
+          });
         }
         
       } catch (refundError) {
-        console.error(`❌ Refund failed for order ${orderId}:`, refundError.message);
+        logger.error('refund_processing_failed', {
+          errorCategory: 'provider',
+          origin: 'razorpay',
+          finality: 'retryable',
+          orderId,
+          errorMessage: refundError.message
+        });
         
         // Update order with failure status
         order.refundStatus = 'failed';
@@ -111,7 +173,12 @@ const refundScheduler = {
         try {
           await googleSheets.updateOrderStatus(order.orderId, 'refund_failed', 'refund_failed');
         } catch (err) {
-          console.error('Google Sheets sync error for failed refund:', err.message);
+          logger.error('google_sheets_sync_error', {
+            errorCategory: 'provider',
+            origin: 'google_sheets',
+            finality: 'retryable',
+            errorMessage: err.message
+          });
         }
         
         // Send failure notification
@@ -119,7 +186,13 @@ const refundScheduler = {
       }
       
     } catch (error) {
-      console.error(`❌ Error processing refund for ${orderId}:`, error.message);
+      logger.error('refund_processing_error', {
+        errorCategory: 'unknown',
+        origin: 'refund_scheduler',
+        finality: 'terminal',
+        orderId,
+        errorMessage: error.message
+      });
     }
   },
 
@@ -136,9 +209,21 @@ const refundScheduler = {
         { id: 'place_order', text: 'New Order' },
         { id: 'home', text: 'Main Menu' }
       ]);
-      console.log(`📱 Refund success message sent to ${order.customer.phone}`);
+      logger.info('refund_success_message_sent', {
+        level: 'info',
+        component: 'refundScheduler',
+        event: 'refund_success_message_sent',
+        timestamp: new Date().toISOString(),
+        context: { orderId, phone: order.customer.phone }
+      });
     } catch (whatsappError) {
-      console.error('WhatsApp refund notification failed:', whatsappError.message);
+      logger.error('refund_notification_failed', {
+        errorCategory: 'provider',
+        origin: 'whatsapp',
+        finality: 'retryable',
+        orderId,
+        errorMessage: whatsappError.message
+      });
     }
   },
 
@@ -155,9 +240,21 @@ const refundScheduler = {
         { id: 'place_order', text: 'New Order' },
         { id: 'home', text: 'Main Menu' }
       ]);
-      console.log(`📱 Refund failure message sent to ${order.customer.phone}`);
+      logger.info('refund_failure_message_sent', {
+        level: 'info',
+        component: 'refundScheduler',
+        event: 'refund_failure_message_sent',
+        timestamp: new Date().toISOString(),
+        context: { orderId, phone: order.customer.phone }
+      });
     } catch (whatsappError) {
-      console.error('WhatsApp refund failure notification failed:', whatsappError.message);
+      logger.error('refund_failure_notification_failed', {
+        errorCategory: 'provider',
+        origin: 'whatsapp',
+        finality: 'retryable',
+        orderId,
+        errorMessage: whatsappError.message
+      });
     }
   },
 
@@ -166,7 +263,13 @@ const refundScheduler = {
     if (timeoutId) {
       clearTimeout(timeoutId);
       pendingRefunds.delete(orderId);
-      console.log(`🚫 Cancelled scheduled refund for ${orderId}`);
+      logger.info('refund_cancelled', {
+        level: 'info',
+        component: 'refundScheduler',
+        event: 'refund_cancelled',
+        timestamp: new Date().toISOString(),
+        context: { orderId }
+      });
     }
   }
 };

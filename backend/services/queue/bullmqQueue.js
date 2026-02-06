@@ -10,6 +10,8 @@ const { Queue, Worker } = require('bullmq');
 const { isRedisConnected, getClient } = require('./redisClient');
 const Logger = require('../logger');
 
+const logger = new Logger('bullmqQueue');
+
 class BullMQQueue {
   constructor() {
     this.logger = new Logger('bullmqQueue');
@@ -156,7 +158,15 @@ class BullMQQueue {
   async enqueue(jobName, payload, context) {
     const { correlationId } = context;
 
-    this.logger.info('queue_enqueue', {
+    logger.info('queue_enqueue_entry', {
+      level: 'info',
+      component: 'bullmqQueue',
+      event: 'queue_enqueue_entry',
+      timestamp: new Date().toISOString(),
+      context: { correlationId, jobName }
+    });
+
+    logger.info('queue_enqueue', {
       jobName,
       correlationId,
       payloadKeys: Object.keys(payload),
@@ -206,6 +216,14 @@ class BullMQQueue {
         jobName,
         correlationId
       });
+      
+      logger.info('queue_enqueue_exit', {
+        level: 'info',
+        component: 'bullmqQueue',
+        event: 'queue_enqueue_exit',
+        timestamp: new Date().toISOString(),
+        context: { correlationId, jobId: job.id, jobName, outcome: 'success', reason: 'job_enqueued' }
+      });
 
       return job;
     } catch (error) {
@@ -215,6 +233,15 @@ class BullMQQueue {
         errorMessage: error.message,
         errorCategory: 'queue_enqueue'
       });
+      
+      logger.info('queue_enqueue_exit', {
+        level: 'info',
+        component: 'bullmqQueue',
+        event: 'queue_enqueue_exit',
+        timestamp: new Date().toISOString(),
+        context: { correlationId, jobName, outcome: 'failed', reason: 'enqueue_failed' }
+      });
+      
       throw error;
     }
   }
@@ -242,6 +269,14 @@ class BullMQQueue {
           const { payload, context } = job.data;
           const { correlationId } = context;
 
+          logger.info('queue_worker_entry', {
+            level: 'info',
+            component: 'bullmqQueue',
+            event: 'queue_worker_entry',
+            timestamp: new Date().toISOString(),
+            context: { correlationId, jobId: job.id, jobName }
+          });
+
           this.logger.info('Processing job', {
             jobId: job.id,
             jobName,
@@ -261,6 +296,14 @@ class BullMQQueue {
               jobName,
               correlationId
             });
+            
+            logger.info('queue_worker_exit', {
+              level: 'info',
+              component: 'bullmqQueue',
+              event: 'queue_worker_exit',
+              timestamp: new Date().toISOString(),
+              context: { correlationId, jobId: job.id, jobName, outcome: 'success', reason: 'job_completed' }
+            });
           } catch (error) {
             this.logger.error('Job processing failed', {
               jobId: job.id,
@@ -269,6 +312,15 @@ class BullMQQueue {
               errorMessage: error.message,
               errorCategory: 'job_execution'
             });
+            
+            logger.info('queue_worker_exit', {
+              level: 'info',
+              component: 'bullmqQueue',
+              event: 'queue_worker_exit',
+              timestamp: new Date().toISOString(),
+              context: { correlationId, jobId: job.id, jobName, outcome: 'failed', reason: 'execution_error' }
+            });
+            
             throw error;
           }
         },

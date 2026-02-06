@@ -6,6 +6,9 @@ const authorize = require('../middleware/authorize');
 const cloudinary = require('../services/cloudinary');
 const googleSheets = require('../services/googleSheets');
 const multer = require('multer');
+const Logger = require('../services/logger');
+
+const logger = new Logger('offers');
 
 const upload = multer({ storage: multer.memoryStorage() });
 
@@ -145,7 +148,6 @@ router.post('/', authenticate, authorize(['admin']), uploadMultiple, async (req,
       const result = await googleSheets.getTopCustomersBySpent(finalTargetPercentage);
       if (result.customers && result.customers.length > 0) {
         targetedCustomerPhones = result.customers.map(c => c.phone);
-        console.log(`🎯 Targeting top ${finalTargetPercentage}% customers: ${targetedCustomerPhones.length} customers`);
       }
     }
 
@@ -177,13 +179,6 @@ router.post('/', authenticate, authorize(['admin']), uploadMultiple, async (req,
 
     await offer.save();
     
-    console.log('Offer saved:', {
-      offerType,
-      percentage,
-      appliedItems: parsedAppliedItems,
-      appliedCategories: parsedAppliedCategories
-    });
-    
     // Apply offer to selected items and categories (if any items/categories are selected)
     if (parsedAppliedItems.length > 0 || parsedAppliedCategories.length > 0) {
       const MenuItem = require('../models/MenuItem');
@@ -193,16 +188,13 @@ router.post('/', authenticate, authorize(['admin']), uploadMultiple, async (req,
       
       // Add items from selected categories
       if (parsedAppliedCategories.length > 0) {
-        console.log('Finding items in categories:', parsedAppliedCategories);
         const categoryItems = await MenuItem.find({
           category: { $in: parsedAppliedCategories }
         });
-        console.log('Found category items:', categoryItems.length);
         const categoryItemIds = categoryItems.map(item => item._id.toString());
         allItemIds = [...new Set([...allItemIds, ...categoryItemIds])];
       }
       
-      console.log('Total items to apply offer:', allItemIds.length);
       
       // Apply offer to all collected items
       for (const itemId of allItemIds) {
@@ -221,9 +213,7 @@ router.post('/', authenticate, authorize(['admin']), uploadMultiple, async (req,
             const discountPercent = parseFloat(percentage);
             const offerPrice = Math.round(item.price * (1 - discountPercent / 100));
             updateFields.offerPrice = offerPrice;
-            console.log(`Applying to ${item.name}: ${item.price} -> ${offerPrice} (${discountPercent}% OFF)`);
           } else {
-            console.log(`Adding offer type to ${item.name}: ${offerType}`);
           }
           
           // Update item
@@ -231,9 +221,8 @@ router.post('/', authenticate, authorize(['admin']), uploadMultiple, async (req,
         }
       }
       
-      console.log('Offer application completed');
     } else {
-      console.log('No items or categories selected for this offer');
+      // No items or categories selected - just save the offer without applying to items
     }
     
     // Emit SSE event to notify clients to refresh (cache-busting)
@@ -243,7 +232,12 @@ router.post('/', authenticate, authorize(['admin']), uploadMultiple, async (req,
     
     res.status(201).json(offer);
   } catch (err) {
-    console.error('Error creating offer:', err);
+    logger.error('offer_creation_failed', {
+      errorCategory: 'domain',
+      origin: 'offers',
+      finality: 'terminal',
+      errorMessage: err.message
+    });
     res.status(500).json({ error: err.message });
   }
 });
@@ -299,7 +293,12 @@ router.put('/:id', authenticate, authorize(['admin']), uploadMultiple, async (re
           const publicId = cloudinary.extractPublicId(imageUrl);
           if (publicId) await cloudinary.deleteImage(publicId);
         } catch (e) {
-          console.log('Could not delete old offer image:', e.message);
+          logger.error('old_offer_image_deletion_failed', {
+            errorCategory: 'provider',
+            origin: 'offers',
+            finality: 'retryable',
+            errorMessage: e.message
+          });
         }
       }
     };
@@ -483,7 +482,12 @@ router.delete('/:id', authenticate, authorize(['admin']), async (req, res) => {
           const publicId = cloudinary.extractPublicId(imageUrl);
           if (publicId) await cloudinary.deleteImage(publicId);
         } catch (e) {
-          console.log('Could not delete offer image:', e.message);
+          logger.error('offer_image_deletion_failed', {
+            errorCategory: 'provider',
+            origin: 'offers',
+            finality: 'retryable',
+            errorMessage: e.message
+          });
         }
       }
     };

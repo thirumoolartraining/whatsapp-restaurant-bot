@@ -11,6 +11,9 @@ const BullMQQueue = require('./bullmqQueue');
 const { initialize: initializeRedis, isRedisConnected } = require('./redisClient');
 const { JOB_TYPES } = require('./jobTypes');
 const { handler: sendWhatsAppMessageHandler } = require('./jobs/sendWhatsAppMessageJob');
+const Logger = require('../logger');
+
+const logger = new Logger('jobQueue');
 
 // Initialize Redis client
 const redisInitialized = initializeRedis();
@@ -23,11 +26,23 @@ let adapterType;
 if (process.env.REDIS_HOST && process.env.REDIS_PORT) {
   queueInstance = new BullMQQueue();
   adapterType = 'bullmq';
-  console.log('🔄 Job Queue: Using BullMQ adapter (Redis configured)');
+  logger.info('queue_adapter_selected', {
+    level: 'info',
+    component: 'jobQueue',
+    event: 'queue_adapter_selected',
+    timestamp: new Date().toISOString(),
+    context: { adapter: 'bullmq', reason: 'redis_configured' }
+  });
 } else {
   queueInstance = new InProcessQueue();
   adapterType = 'inprocess';
-  console.log('🔄 Job Queue: Using InProcess adapter (Redis not configured)');
+  logger.info('queue_adapter_selected', {
+    level: 'info',
+    component: 'jobQueue',
+    event: 'queue_adapter_selected',
+    timestamp: new Date().toISOString(),
+    context: { adapter: 'inprocess', reason: 'redis_not_configured' }
+  });
 }
 
 // Register job handlers
