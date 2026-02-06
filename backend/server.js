@@ -30,6 +30,7 @@ const heroSectionRoutes = require('./routes/heroSection');
 const offersRoutes = require('./routes/offers');
 const whatsappBroadcastRoutes = require('./routes/whatsappBroadcast');
 const settingsRoutes = require('./routes/settings');
+const observabilityRoutes = require('./routes/observability');
 const orderScheduler = require('./services/orderScheduler');
 const dailyCleanup = require('./services/dailyCleanup');
 const categoryScheduler = require('./services/categoryScheduler');
@@ -37,6 +38,7 @@ const orderCleanup = require('./services/orderCleanup');
 const cartCleanup = require('./services/cartCleanup');
 const googleSheets = require('./services/googleSheets');
 const errorHandler = require('./middleware/errorHandler');
+const { initializeEventSource } = require('./observability/eventSource');
 
 const app = express();
 
@@ -70,6 +72,10 @@ mongoose.connect(process.env.MONGODB_URI)
     await googleSheets.initializeDailyReportsSheet();
     await googleSheets.initializeDashboardStatsSheet();
     await googleSheets.initializeCustomersSheet();
+    
+    // Initialize event source for observability
+    await initializeEventSource();
+    
     logger.info('google_sheets_initialized', {
       component: 'server',
       event: 'google_sheets_initialized',
@@ -101,6 +107,7 @@ app.use('/api/hero-sections', adminLimiter, heroSectionRoutes);
 app.use('/api/offers', adminLimiter, offersRoutes);
 app.use('/api/whatsapp-broadcast', adminLimiter, whatsappBroadcastRoutes);
 app.use('/api/settings', adminLimiter, settingsRoutes);
+app.use('/api/observability', observabilityRoutes);
 
 // Global error handler
 app.use(errorHandler);
