@@ -118,14 +118,6 @@ const brevoMail = {
       });
       return false;
     }
-        errorCategory: 'provider',
-        origin: 'brevo_mail',
-        finality: 'retryable',
-        email,
-        errorMessage: error.message
-      });
-      return false;
-    }
   },
 
   async sendStatusUpdate(email, orderId, status, message) {
@@ -229,14 +221,6 @@ const brevoMail = {
       return true;
     } catch (error) {
       logger.error('brevo_report_email_failed', {
-        errorCategory: 'provider',
-        origin: 'brevo_mail',
-        finality: 'retryable',
-        email,
-        errorMessage: error.message
-      });
-      throw error;
-    }
         errorCategory: 'provider',
         origin: 'brevo_mail',
         finality: 'retryable',

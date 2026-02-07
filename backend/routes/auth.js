@@ -7,7 +7,9 @@ const router = express.Router();
 const logger = new Logger('auth');
 
 // Public test endpoint - send test notification to any push token (for debugging)
-router.post('/test-push', async (req, res) => {
+// Only available in non-production environments
+if (process.env.NODE_ENV !== 'production') {
+  router.post('/test-push', async (req, res) => {
   try {
     const { pushToken } = req.body;
     
@@ -29,6 +31,7 @@ router.post('/test-push', async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 });
+}
 
 router.post('/login', async (req, res) => {
   try {
@@ -133,7 +136,9 @@ router.post('/reset-badge', async (req, res) => {
 });
 
 // Test push notification endpoint (for debugging)
-router.post('/test-notification', async (req, res) => {
+// Only available in non-production environments
+if (process.env.NODE_ENV !== 'production') {
+  router.post('/test-notification', async (req, res) => {
   const token = req.headers.authorization?.split(' ')[1];
   if (!token) return res.status(401).json({ error: 'No token' });
   
@@ -163,6 +168,7 @@ router.post('/test-notification', async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 });
+}
 
 module.exports = router;
 

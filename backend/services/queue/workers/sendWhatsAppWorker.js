@@ -11,11 +11,12 @@
 const { Worker } = require('bullmq');
 const { getClient } = require('../redisClient');
 const { handler: sendWhatsAppMessageHandler } = require('../jobs/sendWhatsAppMessageJob');
-const { shouldRetry, getBackoffMs, classifyRetryReason } = require('../retryPolicy');
+const { shouldRetryWithIntervention, getBackoffMs, classifyRetryReason } = require('../retryPolicy');
 const { shouldThrottle, getThrottleDelayMs, shouldApplyBurstGuardrail, getBurstDelayMs } = require('../throttlePolicy');
 const { isBroadcastThrottleEnabled, isTransactionalThrottleEnabled, isBurstGuardrailEnabled } = require('../throttleActivation');
 const Logger = require('../../logger');
 const rateLimiter = require('../rateLimiter');
+const { assertScopeAllowed } = require('../../../security/scopeRegistry');
 
 const logger = new Logger('sendWhatsAppWorker');
 
@@ -346,14 +347,30 @@ function createWorker() {
         const httpStatus = error.httpStatus || null;
         const errorCode = error.errorCode || null;
         
-        // Make retry decision using policy
-        const retryDecision = shouldRetry({
+        // Make retry decision using policy with intervention awareness
+        const retryDecision = await shouldRetryWithIntervention({
           errorCategory,
           httpStatus,
           errorCode,
           attemptNumber,
-          maxAttempts
+          maxAttempts,
+          correlationId
         });
+
+        // Enforce scope for retry execution
+        if (retryDecision) {
+          assertScopeAllowed({
+            actionName: 'RETRY_EXECUTE',
+            actor: 'system',
+            correlationId,
+            context: { 
+              jobName: job.name,
+              attemptNumber: attemptNumber + 1,
+              maxAttempts,
+              errorCategory
+            }
+          });
+        }
         
         // Calculate next backoff for logging only
         const nextAttemptNumber = attemptNumber + 1;

@@ -8,6 +8,8 @@ const groqAi = require('../services/groqAi');
 const metaSignatureVerify = require('../middleware/metaSignatureVerify');
 const { webhookLimiter } = require('../middleware/rateLimit');
 const Logger = require('../services/logger');
+const { assertScopeAllowed } = require('../security/scopeRegistry');
+const { assertAbuseAllowed, isPhoneLocked } = require('../security/abuseGuard');
 const router = express.Router();
 
 const logger = new Logger('webhook');
@@ -339,13 +341,14 @@ router.post('/meta', metaSignatureVerify, webhookLimiter, async (req, res) => {
                   component: 'webhook',
                   event: 'voice_message_received',
                   timestamp: new Date().toISOString(),
-                  context: { audioId }
+                  context: { correlationId, audioId }
                 });
                 
                 if (audioId) {
+                  let audioBuffer;
                   try {
                     // Download and transcribe the audio
-                    const audioBuffer = await metaCloud.downloadMedia(audioId);
+                    audioBuffer = await metaCloud.downloadMedia(audioId);
                     let transcription = await groqAi.transcribeAudio(audioBuffer, message.audio?.mime_type || 'audio/ogg');
                     
                     if (transcription && transcription.trim()) {
@@ -360,10 +363,24 @@ router.post('/meta', metaSignatureVerify, webhookLimiter, async (req, res) => {
                         component: 'webhook',
                         event: 'voice_transcribed',
                         timestamp: new Date().toISOString(),
-                        context: { rawTranscription, normalizedTranscription: text }
+                        context: { correlationId, rawTranscription, normalizedTranscription: text }
                       });
                     } else {
-                      // Transcription failed, send error message
+                      // Transcription failed - emit audit event
+                      logger.error('voice_processing_failed', {
+                        level: 'error',
+                        component: 'webhook',
+                        event: 'voice_processing_failed',
+                        timestamp: new Date().toISOString(),
+                        context: { 
+                          correlationId,
+                          phone,
+                          errorCategory: 'transcription_failed',
+                          audioId,
+                          payloadSize: audioBuffer ? audioBuffer.length : null
+                        }
+                      });
+                      
                       await whatsapp.sendButtons(phone, 
                         "🎤 Sorry, I couldn't understand your voice message. Please try again or type your message.",
                         [
@@ -374,14 +391,29 @@ router.post('/meta', metaSignatureVerify, webhookLimiter, async (req, res) => {
                       continue;
                     }
                   } catch (err) {
+                    // Voice processing failed - emit audit event
+                    let errorCategory = 'transcription_failed';
+                    if (err.message.includes('format') || err.message.includes('mime')) {
+                      errorCategory = 'format_unsupported';
+                    } else if (err.message.includes('size') || err.message.includes('large')) {
+                      errorCategory = 'size_exceeded';
+                    }
+                    
                     logger.error('voice_processing_failed', {
-                      errorCategory: 'provider',
-                      origin: 'voice_transcription',
-                      finality: 'retryable',
-                      phone,
-                      audioId,
-                      errorMessage: err.message
+                      level: 'error',
+                      component: 'webhook',
+                      event: 'voice_processing_failed',
+                      timestamp: new Date().toISOString(),
+                      context: { 
+                        correlationId,
+                        phone,
+                        errorCategory,
+                        audioId,
+                        payloadSize: audioBuffer ? audioBuffer.length : null,
+                        errorMessage: err.message
+                      }
                     });
+                    
                     await whatsapp.sendButtons(phone,
                       "🎤 Sorry, I couldn't process your voice message. Please type your message instead.",
                       [
@@ -396,6 +428,63 @@ router.post('/meta', metaSignatureVerify, webhookLimiter, async (req, res) => {
 
               const hasContent = text || selectedId || messageType === 'location';
               if (phone && hasContent) {
+                // Check if phone is locked for abuse violations
+                const phoneLocked = await isPhoneLocked(phone);
+                if (phoneLocked) {
+                  logger.warn('Inbound message rejected - phone locked', {
+                    level: 'warn',
+                    component: 'webhook',
+                    event: 'abuse_locked',
+                    timestamp: new Date().toISOString(),
+                    context: { correlationId, phone, messageType }
+                  });
+                  
+                  // Send safe user message for lockout
+                  await whatsapp.sendMessage(phone, "You're sending messages too fast. Please wait a few minutes.", correlationId);
+                  continue;
+                }
+
+                // Enforce abuse limits for inbound messages
+                try {
+                  await assertAbuseAllowed({
+                    rule: 'inbound_per_phone_per_minute',
+                    key: phone,
+                    correlationId,
+                    actor: 'system',
+                    context: { phone, messageType, hasContent }
+                  });
+                } catch (abuseError) {
+                  if (abuseError.code === 'ABUSE_LIMIT_EXCEEDED') {
+                    logger.warn('Inbound message rejected - abuse limit exceeded', {
+                      level: 'warn',
+                      component: 'webhook',
+                      event: 'abuse_denied',
+                      timestamp: new Date().toISOString(),
+                      context: { 
+                        correlationId, 
+                        phone, 
+                        messageType, 
+                        rule: 'inbound_per_phone_per_minute',
+                        remaining: abuseError.remaining,
+                        resetAt: abuseError.resetAt
+                      }
+                    });
+                    
+                    // Send safe user message for rate limiting
+                    await whatsapp.sendMessage(phone, "You're sending messages too fast. Please wait a few minutes.", correlationId);
+                    continue;
+                  }
+                  throw abuseError; // Re-throw other errors
+                }
+
+                // Enforce scope for inbound message processing
+                assertScopeAllowed({
+                  actionName: 'INBOUND_MESSAGE_ACCEPT',
+                  actor: 'system',
+                  correlationId,
+                  context: { phone, messageType, hasContent }
+                });
+
                 // Process message in the background
                 messageProcessor.processInboundMessage({
                   provider: 'meta',

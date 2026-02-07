@@ -122,7 +122,9 @@ router.post('/send-offer', authenticate, authorize(['admin']), async (req, res) 
 });
 
 // Test send offer to a single phone number
-router.post('/test-send', authenticate, authorize(['admin']), async (req, res) => {
+// Only available in non-production environments
+if (process.env.NODE_ENV !== 'production') {
+  router.post('/test-send', authenticate, authorize(['admin']), async (req, res) => {
   try {
     const { phone, offerImageUrl, offerTitle, offerDescription, offerType } = req.body;
     
@@ -147,5 +149,6 @@ router.post('/test-send', authenticate, authorize(['admin']), async (req, res) =
     res.status(500).json({ success: false, error: error.message });
   }
 });
+}
 
 module.exports = router;

@@ -47,14 +47,61 @@ async function processInboundMessage({ provider, payload, reqId }) {
   let usedFallback = false;
 
   if (!messageIdForIdempotency) {
-    // Generate conservative fallback key
-    const minuteTimestamp = Math.floor(Date.now() / 60000) * 60000;
-    const fallbackData = `${normalizedMessage.fromPhone}${normalizedMessage.messageType}${minuteTimestamp}`;
-    messageIdForIdempotency = crypto.createHash('sha256').update(fallbackData).digest('hex').substring(0, 16);
+    // Generate deterministic fallback key using coarse timestamp bucket
+    const requiredFields = [normalizedMessage.fromPhone, normalizedMessage.messageType];
+    
+    // Check if required fields for deterministic key are present
+    if (requiredFields.some(field => !field)) {
+      // FAIL CLOSED - cannot generate deterministic key
+      logger.error('idempotency_key_missing', {
+        level: 'error',
+        component: 'messageProcessor',
+        event: 'idempotency_key_missing',
+        timestamp: new Date().toISOString(),
+        context: { 
+          correlationId,
+          phone: normalizedMessage.fromPhone,
+          messageType: normalizedMessage.messageType,
+          reason: 'MISSING_REQUIRED_FIELDS_FOR_DETERMINISTIC_KEY'
+        }
+      });
+      
+      logger.info('message_processor_exit', {
+        level: 'info',
+        component: 'messageProcessor',
+        event: 'message_processor_exit',
+        timestamp: new Date().toISOString(),
+        context: { correlationId, outcome: 'failed', reason: 'idempotency_key_missing' }
+      });
+      
+      throw new Error('Message processing aborted: Cannot generate deterministic idempotency key - missing required fields (phone, messageType)');
+    }
+    
+    // Use 60-second timestamp bucket for deterministic grouping
+    const timestampBucket = Math.floor(Date.now() / 60000) * 60000;
+    
+    // Create message content hash for additional determinism
+    const messageContent = payload.text || payload.selectedId || '';
+    const messageContentHash = crypto.createHash('sha256').update(messageContent).digest('hex').substring(0, 8);
+    
+    // Construct deterministic idempotency key
+    const deterministicData = `${normalizedMessage.fromPhone}${normalizedMessage.messageType}${timestampBucket}${messageContentHash}`;
+    messageIdForIdempotency = crypto.createHash('sha256').update(deterministicData).digest('hex').substring(0, 16);
     usedFallback = true;
-    logger.warn('Using fallback message ID for idempotency', {
-      fallbackMessageId: messageIdForIdempotency,
-      correlationId
+    
+    logger.warn('idempotency_fallback_key_generated', {
+      level: 'warn',
+      component: 'messageProcessor',
+      event: 'idempotency_fallback_key_generated',
+      timestamp: new Date().toISOString(),
+      context: { 
+        correlationId,
+        fallbackMessageId: messageIdForIdempotency,
+        phone: normalizedMessage.fromPhone,
+        messageType: normalizedMessage.messageType,
+        timestampBucket,
+        messageContentHash
+      }
     });
   }
 

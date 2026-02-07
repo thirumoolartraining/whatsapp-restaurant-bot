@@ -1,10 +1,14 @@
 /**
  * Retry Policy Module
  * Phase 4.3: Retry Policy Contract - Step 1
+ * Phase 6.2: Intervention Authority Framework - Integration
  * 
  * Pure functions for determining retry eligibility and backoff timing.
  * No I/O, no side effects, deterministic behavior.
  */
+
+const Intervention = require('../../models/Intervention');
+const { assertAbuseAllowed } = require('../../security/abuseGuard');
 
 /**
  * Determine if a job should be retried based on error and attempt information
@@ -28,6 +32,54 @@ function shouldRetry({ errorCategory, httpStatus, errorCode, attemptNumber, maxA
   }
 
   // If errorCategory is missing → default false (conservative)
+  return false;
+}
+
+/**
+ * Determine if a job should be retried with intervention awareness
+ * @param {Object} input - Retry decision input
+ * @param {string|null} input.errorCategory - 'policy' | 'transient' | null
+ * @param {number|null} input.httpStatus - HTTP status code if available
+ * @param {string|null} input.errorCode - Error code if available
+ * @param {number} input.attemptNumber - Current attempt number (1-based)
+ * @param {number} input.maxAttempts - Maximum allowed attempts
+ * @param {string} input.correlationId - Correlation ID for intervention lookup
+ * @returns {Promise<boolean>} Whether retry should be allowed
+ */
+async function shouldRetryWithIntervention({ errorCategory, httpStatus, errorCode, attemptNumber, maxAttempts, correlationId }) {
+  // First, check normal retry policy
+  const normalRetryDecision = shouldRetry({ errorCategory, httpStatus, errorCode, attemptNumber, maxAttempts });
+  
+  // If normal policy allows retry, return true
+  if (normalRetryDecision) {
+    return true;
+  }
+  
+  // If normal policy denies retry, check for RETRY_OVERRIDE intervention
+  if (attemptNumber >= maxAttempts) {
+    try {
+      // Check if there's an executed RETRY_OVERRIDE intervention for this correlationId
+      const intervention = await Intervention.findUnconsumed(correlationId, 'RETRY_OVERRIDE');
+      
+      if (intervention) {
+        // Enforce abuse limits for retry overrides
+        await assertAbuseAllowed({
+          rule: 'retry_overrides_per_correlation',
+          key: correlationId,
+          correlationId,
+          actor: 'system',
+          context: { attemptNumber, maxAttempts, errorCategory, httpStatus, errorCode }
+        });
+        
+        // Allow exactly one additional retry beyond normal limits
+        return attemptNumber === maxAttempts; // Only allow the first extra attempt
+      }
+    } catch (error) {
+      // If abuse check fails or intervention lookup fails, default to normal policy (fail safe)
+      return false;
+    }
+  }
+  
   return false;
 }
 
@@ -78,6 +130,7 @@ function classifyRetryReason({ errorCategory, shouldRetry, attemptNumber, maxAtt
 
 module.exports = {
   shouldRetry,
+  shouldRetryWithIntervention,
   getBackoffMs,
   classifyRetryReason
 };

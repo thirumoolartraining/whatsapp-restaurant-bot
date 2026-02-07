@@ -9,6 +9,7 @@
 const metaCloud = require('../../metaCloud');
 const OutboundMessage = require('../../../models/OutboundMessage');
 const Logger = require('../../logger');
+const { assertScopeAllowed } = require('../../../security/scopeRegistry');
 
 const logger = new Logger('sendWhatsAppMessageJob');
 
@@ -26,6 +27,14 @@ const jobName = 'SEND_WHATSAPP_MESSAGE';
 async function handler(payload, context) {
   const { methodName, args, outboundMessageId } = payload;
   const { correlationId } = context;
+
+  // Enforce scope for job execution
+  assertScopeAllowed({
+    actionName: 'QUEUE_JOB_EXECUTE',
+    actor: 'system',
+    correlationId,
+    context: { jobName, methodName }
+  });
 
   logger.info('Processing WhatsApp message job', {
     methodName,

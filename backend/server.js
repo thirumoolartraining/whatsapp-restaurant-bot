@@ -32,6 +32,7 @@ const offersRoutes = require('./routes/offers');
 const whatsappBroadcastRoutes = require('./routes/whatsappBroadcast');
 const settingsRoutes = require('./routes/settings');
 const observabilityRoutes = require('./routes/observability');
+const interventionRoutes = require('./routes/intervention');
 const orderScheduler = require('./services/orderScheduler');
 const dailyCleanup = require('./services/dailyCleanup');
 const categoryScheduler = require('./services/categoryScheduler');
@@ -40,6 +41,7 @@ const cartCleanup = require('./services/cartCleanup');
 const googleSheets = require('./services/googleSheets');
 const errorHandler = require('./middleware/errorHandler');
 const { initializeEventSource } = require('./observability/eventSource');
+const productionRouteAudit = require('./middleware/productionRouteAudit');
 
 const app = express();
 
@@ -48,6 +50,9 @@ app.options('*', cors(corsConfig));
 app.use(cors(corsConfig));
 app.use(express.json());
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+
+// Production route audit middleware - detects attempts to access test/debug routes
+app.use(productionRouteAudit);
 
 // Log all API requests for debugging
 app.use('/api', (req, res, next) => {
@@ -95,7 +100,10 @@ mongoose.connect(process.env.MONGODB_URI)
 app.use('/api/auth', authLimiter, authRoutes);
 app.use('/api/menu', menuRoutes);
 app.use('/api/orders', orderRoutes);
-app.use('/api/webhook', webhookRoutes);
+// Only register webhook routes in non-production environments
+if (process.env.NODE_ENV !== 'production') {
+  app.use('/api/webhook', webhookRoutes);
+}
 app.use('/api/payment', paymentRoutes);
 app.use('/api/customers', customerRoutes);
 app.use('/api/analytics', adminLimiter, analyticsRoutes);
@@ -109,6 +117,7 @@ app.use('/api/offers', adminLimiter, offersRoutes);
 app.use('/api/whatsapp-broadcast', adminLimiter, whatsappBroadcastRoutes);
 app.use('/api/settings', adminLimiter, settingsRoutes);
 app.use('/api/observability', adminLimiter, authMiddleware, observabilityRoutes);
+app.use('/api/admin/interventions', adminLimiter, interventionRoutes);
 
 // Global error handler
 app.use(errorHandler);
@@ -150,7 +159,9 @@ dataEvents.on('menu', () => broadcast('menu'));
 dataEvents.on('deliveryboys', () => broadcast('deliveryboys'));
 
 // Test endpoint for Google Sheets sync
-app.get('/api/test-sheets/:orderId/:status', async (req, res) => {
+// Only available in non-production environments
+if (process.env.NODE_ENV !== 'production') {
+  app.get('/api/test-sheets/:orderId/:status', async (req, res) => {
   const googleSheets = require('./services/googleSheets');
   const { orderId, status } = req.params;
   try {
@@ -160,9 +171,12 @@ app.get('/api/test-sheets/:orderId/:status', async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+}
 
 // Sync all cancelled orders to Google Sheets
-app.get('/api/sync-cancelled', async (req, res) => {
+// Only available in non-production environments
+if (process.env.NODE_ENV !== 'production') {
+  app.get('/api/sync-cancelled', async (req, res) => {
   const Order = require('./models/Order');
   const googleSheets = require('./services/googleSheets');
   try {
@@ -177,9 +191,12 @@ app.get('/api/sync-cancelled', async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+}
 
 // Sync pending refund orders to refundprocessing sheet
-app.get('/api/sync-pending-refunds', async (req, res) => {
+// Only available in non-production environments
+if (process.env.NODE_ENV !== 'production') {
+  app.get('/api/sync-pending-refunds', async (req, res) => {
   const googleSheets = require('./services/googleSheets');
   try {
     const result = await googleSheets.syncPendingRefunds();
@@ -188,6 +205,7 @@ app.get('/api/sync-pending-refunds', async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+}
 
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {

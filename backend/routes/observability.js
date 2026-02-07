@@ -20,6 +20,9 @@ const { getEventSource } = require('../observability/eventSource');
 // Validation helpers
 const { validateCorrelationId, validateSearchQuery } = require('../observability/validation');
 
+// Scope enforcement
+const { assertScopeAllowed } = require('../security/scopeRegistry');
+
 /**
  * Helper function to send standardized error responses
  */
@@ -75,6 +78,14 @@ function createResponse(success, data = null, error = null) {
 router.get('/timeline/:correlationId', async (req, res) => {
   const { correlationId } = req.params;
   
+  // Enforce scope for observability query
+  assertScopeAllowed({
+    actionName: 'OBSERVABILITY_QUERY',
+    actor: 'admin',
+    correlationId: null,
+    context: { endpoint: 'timeline', correlationId }
+  });
+  
   // Validate correlation ID
   const validation = validateCorrelationId(correlationId);
   if (!validation.ok) {
@@ -128,6 +139,14 @@ router.get('/timeline/:correlationId', async (req, res) => {
  */
 router.get('/failure/:correlationId', async (req, res) => {
   const { correlationId } = req.params;
+  
+  // Enforce scope for observability query
+  assertScopeAllowed({
+    actionName: 'OBSERVABILITY_QUERY',
+    actor: 'admin',
+    correlationId: null,
+    context: { endpoint: 'failure', correlationId }
+  });
   
   // Validate correlation ID
   const validation = validateCorrelationId(correlationId);
@@ -194,6 +213,14 @@ router.get('/failure/:correlationId', async (req, res) => {
 router.get('/throttle/:correlationId', async (req, res) => {
   const { correlationId } = req.params;
   
+  // Enforce scope for observability query
+  assertScopeAllowed({
+    actionName: 'OBSERVABILITY_QUERY',
+    actor: 'admin',
+    correlationId: null,
+    context: { endpoint: 'throttle', correlationId }
+  });
+  
   // Validate correlation ID
   const validation = validateCorrelationId(correlationId);
   if (!validation.ok) {
@@ -238,6 +265,14 @@ router.get('/throttle/:correlationId', async (req, res) => {
  */
 router.get('/retry/:correlationId', async (req, res) => {
   const { correlationId } = req.params;
+  
+  // Enforce scope for observability query
+  assertScopeAllowed({
+    actionName: 'OBSERVABILITY_QUERY',
+    actor: 'admin',
+    correlationId: null,
+    context: { endpoint: 'retry', correlationId }
+  });
   
   // Validate correlation ID
   const validation = validateCorrelationId(correlationId);
@@ -290,6 +325,14 @@ router.get('/retry/:correlationId', async (req, res) => {
  * - outcome: success|failed|retried|deadlettered|unknown
  */
 router.get('/search', async (req, res) => {
+  // Enforce scope for observability query
+  assertScopeAllowed({
+    actionName: 'OBSERVABILITY_QUERY',
+    actor: 'admin',
+    correlationId: null,
+    context: { endpoint: 'search', query: req.query }
+  });
+  
   // Validate all query parameters
   const validation = validateSearchQuery(req.query);
   if (!validation.ok) {

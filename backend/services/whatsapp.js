@@ -4,11 +4,30 @@ const OutboundMessage = require('../models/OutboundMessage');
 const Logger = require('./logger');
 const jobQueue = require('./queue/jobQueue');
 const { JOB_TYPES } = require('./queue/jobTypes');
+const { assertScopeAllowed } = require('../security/scopeRegistry');
+const { assertAbuseAllowed } = require('../security/abuseGuard');
 
 const logger = new Logger('whatsapp');
 
 const whatsapp = {
   async sendMessage(phone, message, correlationId = null) {
+    // Enforce abuse limits for outbound messages
+    await assertAbuseAllowed({
+      rule: 'outbound_per_phone_per_minute',
+      key: phone,
+      correlationId,
+      actor: 'system',
+      context: { phone, messageType: 'text' }
+    });
+
+    // Enforce scope for transactional message sending
+    assertScopeAllowed({
+      actionName: 'TRANSACTIONAL_MESSAGE_SEND',
+      actor: 'system',
+      correlationId,
+      context: { phone, messageType: 'text' }
+    });
+
     const payload = { phone, message };
     const outboundMessage = await createOutboundMessage(phone, 'text', payload);
     
@@ -47,6 +66,23 @@ const whatsapp = {
   },
 
   async sendButtons(phone, message, buttons, footer = '', correlationId = null) {
+    // Enforce abuse limits for outbound messages
+    await assertAbuseAllowed({
+      rule: 'outbound_per_phone_per_minute',
+      key: phone,
+      correlationId,
+      actor: 'system',
+      context: { phone, messageType: 'buttons' }
+    });
+
+    // Enforce scope for template message sending
+    assertScopeAllowed({
+      actionName: 'TEMPLATE_SEND',
+      actor: 'system',
+      correlationId,
+      context: { phone, messageType: 'buttons' }
+    });
+
     const payload = { phone, message, buttons, footer };
     const outboundMessage = await createOutboundMessage(phone, 'buttons', payload);
     
@@ -85,6 +121,23 @@ const whatsapp = {
   },
 
   async sendList(phone, title, description, buttonText, sections, footer = '', correlationId = null) {
+    // Enforce abuse limits for outbound messages
+    await assertAbuseAllowed({
+      rule: 'outbound_per_phone_per_minute',
+      key: phone,
+      correlationId,
+      actor: 'system',
+      context: { phone, messageType: 'list' }
+    });
+
+    // Enforce scope for template message sending
+    assertScopeAllowed({
+      actionName: 'TEMPLATE_SEND',
+      actor: 'system',
+      correlationId,
+      context: { phone, messageType: 'list' }
+    });
+
     const payload = { phone, title, description, buttonText, sections, footer };
     const outboundMessage = await createOutboundMessage(phone, 'list', payload);
     
@@ -123,6 +176,23 @@ const whatsapp = {
   },
 
   async sendTemplateButtons(phone, message, buttons, footer = '', correlationId = null) {
+    // Enforce abuse limits for outbound messages
+    await assertAbuseAllowed({
+      rule: 'outbound_per_phone_per_minute',
+      key: phone,
+      correlationId,
+      actor: 'system',
+      context: { phone, messageType: 'template_buttons' }
+    });
+
+    // Enforce scope for template message sending
+    assertScopeAllowed({
+      actionName: 'TEMPLATE_SEND',
+      actor: 'system',
+      correlationId,
+      context: { phone, messageType: 'template_buttons' }
+    });
+
     const payload = { phone, message, buttons, footer };
     const outboundMessage = await createOutboundMessage(phone, 'template_buttons', payload);
     
@@ -161,6 +231,23 @@ const whatsapp = {
   },
 
   async sendOrder(phone, order, items, paymentUrl, imageUrl = null, correlationId = null) {
+    // Enforce abuse limits for outbound messages
+    await assertAbuseAllowed({
+      rule: 'outbound_per_phone_per_minute',
+      key: phone,
+      correlationId,
+      actor: 'system',
+      context: { phone, messageType: 'order' }
+    });
+
+    // Enforce scope for transactional message sending
+    assertScopeAllowed({
+      actionName: 'TRANSACTIONAL_MESSAGE_SEND',
+      actor: 'system',
+      correlationId,
+      context: { phone, messageType: 'order' }
+    });
+
     const payload = { phone, order, items, paymentUrl, imageUrl };
     const outboundMessage = await createOutboundMessage(phone, 'order', payload);
     
@@ -199,6 +286,23 @@ const whatsapp = {
   },
 
   async sendImage(phone, imageUrl, caption = '', correlationId = null) {
+    // Enforce abuse limits for outbound messages
+    await assertAbuseAllowed({
+      rule: 'outbound_per_phone_per_minute',
+      key: phone,
+      correlationId,
+      actor: 'system',
+      context: { phone, messageType: 'image' }
+    });
+
+    // Enforce scope for transactional message sending
+    assertScopeAllowed({
+      actionName: 'TRANSACTIONAL_MESSAGE_SEND',
+      actor: 'system',
+      correlationId,
+      context: { phone, messageType: 'image' }
+    });
+
     const payload = { phone, imageUrl, caption };
     const outboundMessage = await createOutboundMessage(phone, 'image', payload);
     
@@ -237,6 +341,23 @@ const whatsapp = {
   },
 
   async sendImageWithButtons(phone, imageUrl, message, buttons, footer = '', correlationId = null) {
+    // Enforce abuse limits for outbound messages
+    await assertAbuseAllowed({
+      rule: 'outbound_per_phone_per_minute',
+      key: phone,
+      correlationId,
+      actor: 'system',
+      context: { phone, messageType: 'image_buttons' }
+    });
+
+    // Enforce scope for template message sending
+    assertScopeAllowed({
+      actionName: 'TEMPLATE_SEND',
+      actor: 'system',
+      correlationId,
+      context: { phone, messageType: 'image_buttons' }
+    });
+
     const payload = { phone, imageUrl, message, buttons, footer };
     const outboundMessage = await createOutboundMessage(phone, 'image_buttons', payload);
     
@@ -275,6 +396,23 @@ const whatsapp = {
   },
 
   async sendLocationRequest(phone, message, correlationId = null) {
+    // Enforce abuse limits for outbound messages
+    await assertAbuseAllowed({
+      rule: 'outbound_per_phone_per_minute',
+      key: phone,
+      correlationId,
+      actor: 'system',
+      context: { phone, messageType: 'location_request' }
+    });
+
+    // Enforce scope for template message sending
+    assertScopeAllowed({
+      actionName: 'TEMPLATE_SEND',
+      actor: 'system',
+      correlationId,
+      context: { phone, messageType: 'location_request' }
+    });
+
     const payload = { phone, message };
     const outboundMessage = await createOutboundMessage(phone, 'location_request', payload);
     
@@ -313,6 +451,23 @@ const whatsapp = {
   },
 
   async sendCtaUrl(phone, message, buttonText, url, footer = '', correlationId = null) {
+    // Enforce abuse limits for outbound messages
+    await assertAbuseAllowed({
+      rule: 'outbound_per_phone_per_minute',
+      key: phone,
+      correlationId,
+      actor: 'system',
+      context: { phone, messageType: 'cta_url' }
+    });
+
+    // Enforce scope for template message sending
+    assertScopeAllowed({
+      actionName: 'TEMPLATE_SEND',
+      actor: 'system',
+      correlationId,
+      context: { phone, messageType: 'cta_url' }
+    });
+
     const payload = { phone, message, buttonText, url, footer };
     const outboundMessage = await createOutboundMessage(phone, 'cta_url', payload);
     
@@ -338,6 +493,23 @@ const whatsapp = {
   },
 
   async sendImageWithCtaUrl(phone, imageUrl, message, buttonText, url, footer = '', correlationId = null) {
+    // Enforce abuse limits for outbound messages
+    await assertAbuseAllowed({
+      rule: 'outbound_per_phone_per_minute',
+      key: phone,
+      correlationId,
+      actor: 'system',
+      context: { phone, messageType: 'image_cta_url' }
+    });
+
+    // Enforce scope for template message sending
+    assertScopeAllowed({
+      actionName: 'TEMPLATE_SEND',
+      actor: 'system',
+      correlationId,
+      context: { phone, messageType: 'image_cta_url' }
+    });
+
     const payload = { phone, imageUrl, message, buttonText, url, footer };
     const outboundMessage = await createOutboundMessage(phone, 'image_cta_url', payload);
     
@@ -363,6 +535,14 @@ const whatsapp = {
   },
 
   async sendImageWithCtaUrlOriginal(phone, imageUrl, message, buttonText, url, footer = '', correlationId = null) {
+    // Enforce scope for broadcast message sending
+    assertScopeAllowed({
+      actionName: 'BROADCAST_MESSAGE_SEND',
+      actor: 'system',
+      correlationId,
+      context: { phone, messageType: 'image_cta_url_original' }
+    });
+
     const payload = { phone, imageUrl, message, buttonText, url, footer };
     const outboundMessage = await createOutboundMessage(phone, 'image_cta_url_original', payload);
     
@@ -388,6 +568,23 @@ const whatsapp = {
   },
 
   async sendCtaPhone(phone, message, buttonText, phoneNumber, footer = '', correlationId = null) {
+    // Enforce abuse limits for outbound messages
+    await assertAbuseAllowed({
+      rule: 'outbound_per_phone_per_minute',
+      key: phone,
+      correlationId,
+      actor: 'system',
+      context: { phone, messageType: 'cta_phone' }
+    });
+
+    // Enforce scope for template message sending
+    assertScopeAllowed({
+      actionName: 'TEMPLATE_SEND',
+      actor: 'system',
+      correlationId,
+      context: { phone, messageType: 'cta_phone' }
+    });
+
     const payload = { phone, message, buttonText, phoneNumber, footer };
     const outboundMessage = await createOutboundMessage(phone, 'cta_phone', payload);
     
@@ -413,6 +610,23 @@ const whatsapp = {
   },
 
   async sendImageWithCtaPhone(phone, imageUrl, message, buttonText, phoneNumber, footer = '', correlationId = null) {
+    // Enforce abuse limits for outbound messages
+    await assertAbuseAllowed({
+      rule: 'outbound_per_phone_per_minute',
+      key: phone,
+      correlationId,
+      actor: 'system',
+      context: { phone, messageType: 'image_cta_phone' }
+    });
+
+    // Enforce scope for template message sending
+    assertScopeAllowed({
+      actionName: 'TEMPLATE_SEND',
+      actor: 'system',
+      correlationId,
+      context: { phone, messageType: 'image_cta_phone' }
+    });
+
     const payload = { phone, imageUrl, message, buttonText, phoneNumber, footer };
     const outboundMessage = await createOutboundMessage(phone, 'image_cta_phone', payload);
     
@@ -438,6 +652,23 @@ const whatsapp = {
   },
 
   async sendMarketingTemplate(phone, templateName, imageUrl, bodyParams = [], buttonUrl = null, correlationId = null) {
+    // Enforce abuse limits for outbound messages
+    await assertAbuseAllowed({
+      rule: 'outbound_per_phone_per_minute',
+      key: phone,
+      correlationId,
+      actor: 'system',
+      context: { phone, templateName, messageType: 'marketing_template' }
+    });
+
+    // Enforce scope for broadcast message sending
+    assertScopeAllowed({
+      actionName: 'BROADCAST_MESSAGE_SEND',
+      actor: 'system',
+      correlationId,
+      context: { phone, templateName, messageType: 'marketing_template' }
+    });
+
     const payload = { phone, templateName, imageUrl, bodyParams, buttonUrl };
     const outboundMessage = await createOutboundMessage(phone, 'marketing_template', payload);
     
@@ -463,6 +694,23 @@ const whatsapp = {
   },
 
   async sendSimpleTemplate(phone, templateName = 'hello_world', languageCode = 'en_US', correlationId = null) {
+    // Enforce abuse limits for outbound messages
+    await assertAbuseAllowed({
+      rule: 'outbound_per_phone_per_minute',
+      key: phone,
+      correlationId,
+      actor: 'system',
+      context: { phone, templateName, messageType: 'simple_template' }
+    });
+
+    // Enforce scope for template message sending
+    assertScopeAllowed({
+      actionName: 'TEMPLATE_SEND',
+      actor: 'system',
+      correlationId,
+      context: { phone, templateName, messageType: 'simple_template' }
+    });
+
     const payload = { phone, templateName, languageCode };
     const outboundMessage = await createOutboundMessage(phone, 'simple_template', payload);
     
