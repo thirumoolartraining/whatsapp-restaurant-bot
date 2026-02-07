@@ -10,9 +10,91 @@ const { webhookLimiter } = require('../middleware/rateLimit');
 const Logger = require('../services/logger');
 const { assertScopeAllowed } = require('../security/scopeRegistry');
 const { assertAbuseAllowed, isPhoneLocked } = require('../security/abuseGuard');
+const OutboundMessage = require('../models/OutboundMessage');
+const DeliveryStatus = require('../models/DeliveryStatus');
 const router = express.Router();
 
 const logger = new Logger('webhook');
+
+// Process delivery status events from Meta webhooks
+async function processStatusEvents(statuses, contactsMap, correlationId) {
+  for (const status of statuses || []) {
+    try {
+      const messageId = status.id;
+      const statusType = status.status; // sent, delivered, failed, read
+      const timestamp = status.timestamp ? new Date(parseInt(status.timestamp) * 1000) : null;
+      const phone = status.recipient_id;
+      
+      // Extract error information for failed status
+      const errorCode = status.errors?.[0]?.code;
+      const errorMessage = status.errors?.[0]?.title;
+      
+      // Create raw event ID for idempotency
+      const rawEventId = `${messageId}_${statusType}_${timestamp?.getTime() || Date.now()}`;
+      
+      // Check for duplicate processing
+      const existingEvent = await DeliveryStatus.findOne({ rawEventId });
+      if (existingEvent) {
+        logger.info('duplicate_status_event_skipped', {
+          level: 'info',
+          component: 'webhook',
+          event: 'duplicate_status_event_skipped',
+          timestamp: new Date().toISOString(),
+          context: { correlationId, messageId, statusType, rawEventId }
+        });
+        continue;
+      }
+      
+      // Attempt correlation with outbound message
+      let correlationIdFound = null;
+      const outboundMessage = await OutboundMessage.findOne({ providerMessageId: messageId });
+      if (outboundMessage) {
+        correlationIdFound = outboundMessage._id.toString();
+      }
+      
+      // Persist delivery status event
+      const deliveryStatus = new DeliveryStatus({
+        messageId,
+        correlationId: correlationIdFound,
+        status: statusType,
+        providerTimestamp: timestamp,
+        receivedAt: new Date(),
+        rawEventId,
+        phone,
+        errorCode,
+        errorMessage
+      });
+      
+      await deliveryStatus.save();
+      
+      logger.info('delivery_status_persisted', {
+        level: 'info',
+        component: 'webhook',
+        event: 'delivery_status_persisted',
+        timestamp: new Date().toISOString(),
+        context: { 
+          correlationId, 
+          messageId, 
+          statusType, 
+          correlationIdFound,
+          phone,
+          timestamp
+        }
+      });
+      
+    } catch (error) {
+      logger.error('status_event_processing_error', {
+        errorCategory: 'unknown',
+        origin: 'webhook',
+        finality: 'terminal',
+        messageId: status.id,
+        statusType: status.status,
+        errorMessage: error.message
+      });
+      // Continue processing other status events even if one fails
+    }
+  }
+}
 
 // Raw body capture middleware for signature verification
 router.use('/meta', express.raw({ type: 'application/json' }), (req, res, next) => {
@@ -291,18 +373,27 @@ router.post('/meta', metaSignatureVerify, webhookLimiter, async (req, res) => {
           if (change.field === 'messages') {
             const value = change.value;
 
-            // Skip status updates (delivery receipts, read receipts)
-            if (value.statuses) {
-              continue;
-            }
-
-            // Extract contact name from Meta API contacts array
+            // Extract contact name from Meta API contacts array (needed for both messages and status)
             const contacts = value.contacts || [];
             const contactsMap = {};
             for (const contact of contacts) {
               if (contact.wa_id && contact.profile?.name) {
                 contactsMap[contact.wa_id] = contact.profile.name;
               }
+            }
+
+            // Process status updates (delivery receipts, read receipts)
+            if (value.statuses) {
+              // Process status events in background, don't block webhook response
+              processStatusEvents(value.statuses, contactsMap, correlationId).catch(err => {
+                logger.error('status_processing_failed', {
+                  errorCategory: 'unknown',
+                  origin: 'webhook',
+                  finality: 'terminal',
+                  errorMessage: err.message
+                });
+              });
+              continue;
             }
 
             for (const message of value.messages || []) {

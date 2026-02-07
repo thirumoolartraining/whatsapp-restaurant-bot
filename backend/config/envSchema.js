@@ -17,20 +17,22 @@ const envSchema = {
     ],
     auth: [
       'JWT_SECRET'
-    ]
+    ],
+    // WhatsApp/Meta variables required in production
+    production: {
+      meta: [
+        'META_ACCESS_TOKEN',
+        'META_PHONE_NUMBER_ID',
+        'META_BUSINESS_ID',
+        'META_APP_SECRET'
+      ]
+    }
   },
 
   // Optional environment variables (listed for completeness)
   optional: {
-    whatsapp: [
-      'WHATSAPP_API_KEY',
-      'WHATSAPP_PHONE_NUMBER_ID',
-      'WHATSAPP_VERIFY_TOKEN'
-    ],
     meta: [
-      'META_ACCESS_TOKEN',
-      'META_APP_SECRET',
-      'META_WEBHOOK_VERIFY_TOKEN'
+      'META_VERIFY_TOKEN'
     ],
     payments: [
       'RAZORPAY_KEY_ID',

@@ -5,18 +5,61 @@ const logger = new Logger('validateEnv');
 
 function validateEnv() {
   const errors = [];
+  const warnings = [];
 
   // Check required environment variables
   for (const [category, keys] of Object.entries(envSchema.required)) {
-    for (const key of keys) {
-      const value = process.env[key];
-      
-      if (value === undefined || value === '') {
-        errors.push(`${key} (${category})`);
-      } else if (typeof value !== 'string' || value.trim() === '') {
-        errors.push(`${key} (${category} - invalid format)`);
+    if (category === 'production') {
+      // Only validate production-specific vars in production
+      if (process.env.NODE_ENV === 'production') {
+        for (const [subCategory, subKeys] of Object.entries(keys)) {
+          for (const key of subKeys) {
+            const value = process.env[key];
+            
+            if (value === undefined || value === '') {
+              errors.push(`${key} (${category}.${subCategory})`);
+            } else if (typeof value !== 'string' || value.trim() === '') {
+              errors.push(`${key} (${category}.${subCategory} - invalid format)`);
+            }
+          }
+        }
+      } else {
+        // In non-production, check for missing Meta vars and warn
+        for (const [subCategory, subKeys] of Object.entries(keys)) {
+          const missingVars = subKeys.filter(key => {
+            const value = process.env[key];
+            return value === undefined || value === '' || (typeof value === 'string' && value.trim() === '');
+          });
+          
+          if (missingVars.length > 0) {
+            warnings.push(`WhatsApp disabled: missing ${missingVars.join(', ')}`);
+          }
+        }
+      }
+    } else {
+      // Validate all other required categories normally
+      for (const key of keys) {
+        const value = process.env[key];
+        
+        if (value === undefined || value === '') {
+          errors.push(`${key} (${category})`);
+        } else if (typeof value !== 'string' || value.trim() === '') {
+          errors.push(`${key} (${category} - invalid format)`);
+        }
       }
     }
+  }
+
+  // Log warnings for non-production environments
+  if (warnings.length > 0 && process.env.NODE_ENV !== 'production') {
+    warnings.forEach(warning => {
+      logger.warn('environment_validation_warning', {
+        errorCategory: 'configuration',
+        origin: 'validate_env',
+        finality: 'warning',
+        warningMessage: warning
+      });
+    });
   }
 
   // If there are validation errors, throw an error
