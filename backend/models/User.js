@@ -7,6 +7,8 @@ const userSchema = new mongoose.Schema({
   role: { type: String, enum: ['admin', 'staff'], default: 'admin' },
   // Push notification token for Expo
   pushToken: { type: String, default: null },
+  // Track when push token was last updated
+  pushTokenUpdatedAt: { type: Date, default: null },
   createdAt: { type: Date, default: Date.now }
 });
 

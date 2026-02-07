@@ -50,13 +50,15 @@ export const AuthProvider = ({ children }) => {
   useEffect(() => {
     const subscription = AppState.addEventListener('change', async (nextAppState) => {
       if (appState.current.match(/inactive|background/) && nextAppState === 'active') {
-        // App came to foreground
-        console.log('📱 App came to foreground - checking notification permission');
+        // App came to foreground - ALWAYS refresh push token
+        console.log('📱 App came to foreground - refreshing push token');
         
         const storedRole = await SecureStore.getItemAsync('role');
         if (storedRole) {
-          // Check permission and prompt if needed
-          await checkAndPromptNotificationPermission(storedRole);
+          // Always register fresh token on foreground - no assumptions about token unchanged
+          registerPushToken(storedRole, false).catch(error => {
+            console.log('Foreground token refresh failed, app continues:', error.message);
+          });
           
           // Clear badge count and notifications when app opens
           await pushNotifications.setBadgeCount(0);
@@ -82,7 +84,7 @@ export const AuthProvider = ({ children }) => {
         clearInterval(permissionCheckInterval.current);
       }
     };
-  }, [checkAndPromptNotificationPermission]);
+  }, []);
 
   useEffect(() => {
     // Register the logout callback with API interceptor
@@ -160,6 +162,7 @@ export const AuthProvider = ({ children }) => {
   // Register push notifications
   const registerPushToken = async (userRole, forcePrompt = false) => {
     try {
+      // Always get fresh token - never rely on cached token
       const { token: pushToken, permissionDenied } = await pushNotifications.registerForPushNotifications(false, forcePrompt);
       
       if (permissionDenied) {
@@ -172,13 +175,13 @@ export const AuthProvider = ({ children }) => {
         // Mark that permission was granted
         await SecureStore.setItemAsync(NOTIFICATION_PERMISSION_GRANTED_KEY, 'true');
         
-        // Send to appropriate endpoint based on role
+        // Send to appropriate endpoint based on role - ALWAYS send token
         if (userRole === 'admin') {
           await api.post('/auth/push-token', { pushToken });
-          console.log('📱 Admin push token registered');
+          console.log('📱 Admin push token registered/refreshed');
         } else {
           await pushNotifications.updatePushToken(pushToken);
-          console.log('📱 Delivery push token registered');
+          console.log('📱 Delivery push token registered/refreshed');
         }
         return true;
       }

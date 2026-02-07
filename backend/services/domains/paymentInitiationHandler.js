@@ -326,6 +326,9 @@ async function handleInitiateOnlinePayment(phone, customer, state, confirmationR
     const pushNotification = require('../pushNotification');
     
     const admins = await User.find({ pushToken: { $ne: null } });
+    const adminUserIds = admins.map(admin => admin._id.toString());
+    const tokenCount = admins.filter(admin => admin.pushToken).length;
+    
     for (const admin of admins) {
       if (admin.pushToken) {
         await pushNotification.sendAdminNewOrderNotification(admin.pushToken, {
@@ -336,11 +339,23 @@ async function handleInitiateOnlinePayment(phone, customer, state, confirmationR
         });
       }
     }
+    
+    logger.info('admin_new_order_push_dispatched', {
+      eventName: 'admin_new_order_push_dispatched',
+      orderId,
+      restaurantId: 'main_restaurant', // Single restaurant instance
+      adminUserIds: adminUserIds.length,
+      tokenCount,
+      provider: 'expo',
+      correlationId
+    });
   } catch (pushErr) {
-    logger.error('admin_push_notification_failed', {
-      errorCategory: 'provider',
-      origin: 'domain',
-      finality: 'retryable',
+    logger.error('admin_new_order_push_failed', {
+      eventName: 'admin_new_order_push_failed',
+      orderId,
+      restaurantId: 'main_restaurant',
+      provider: 'expo',
+      correlationId,
       errorMessage: pushErr.message
     });
   }
@@ -465,6 +480,8 @@ async function handleInitiateCOD(phone, customer, state, correlationId = null, m
     trackingUpdates: [{ status: 'confirmed', message: 'Order confirmed - Cash on Delivery' }]
   });
 
+  // CRITICAL: Save the order to MongoDB
+  await order.save();
 
   const whatsappBroadcast = require('../whatsappBroadcast');
   await whatsappBroadcast.addContact(freshCustomer.phone, freshCustomer.name, new Date());
@@ -506,6 +523,46 @@ async function handleInitiateCOD(phone, customer, state, correlationId = null, m
     finality: 'retryable',
     errorMessage: err.message
   }));
+
+  // Send push notification to admin for new COD order
+  try {
+    const User = require('../../models/User');
+    const pushNotification = require('../pushNotification');
+    
+    const admins = await User.find({ pushToken: { $ne: null } });
+    const adminUserIds = admins.map(admin => admin._id.toString());
+    const tokenCount = admins.filter(admin => admin.pushToken).length;
+    
+    for (const admin of admins) {
+      if (admin.pushToken) {
+        await pushNotification.sendAdminNewOrderNotification(admin.pushToken, {
+          orderId,
+          totalAmount: total,
+          customerName: freshCustomer.name || 'Customer',
+          items
+        });
+      }
+    }
+    
+    logger.info('admin_new_order_push_dispatched', {
+      eventName: 'admin_new_order_push_dispatched',
+      orderId,
+      restaurantId: 'main_restaurant', // Single restaurant instance
+      adminUserIds: adminUserIds.length,
+      tokenCount,
+      provider: 'expo',
+      correlationId
+    });
+  } catch (pushErr) {
+    logger.error('admin_new_order_push_failed', {
+      eventName: 'admin_new_order_push_failed',
+      orderId,
+      restaurantId: 'main_restaurant',
+      provider: 'expo',
+      correlationId,
+      errorMessage: pushErr.message
+    });
+  }
 
   freshCustomer.cart = [];
   freshCustomer.orderHistory = freshCustomer.orderHistory || [];

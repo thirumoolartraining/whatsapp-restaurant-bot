@@ -20,6 +20,7 @@
       "bundleIdentifier": "com.foodadmin.mobile",
       "infoPlist": {
         "NSLocationWhenInUseUsageDescription": "We need your location to navigate to delivery addresses.",
+        "NSUserNotificationUsageDescription": "We send notifications about new orders, order updates, and important restaurant alerts to help you manage your business efficiently.",
         "UIBackgroundModes": ["remote-notification"]
       }
     },

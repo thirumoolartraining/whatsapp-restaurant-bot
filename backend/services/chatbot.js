@@ -4825,6 +4825,9 @@ const chatbot = {
       const pushNotification = require('./pushNotification');
       
       const admins = await User.find({ pushToken: { $ne: null } });
+      const adminUserIds = admins.map(admin => admin._id.toString());
+      const tokenCount = admins.filter(admin => admin.pushToken).length;
+      
       for (const admin of admins) {
         if (admin.pushToken) {
           await pushNotification.sendAdminNewOrderNotification(admin.pushToken, {
@@ -4835,12 +4838,23 @@ const chatbot = {
           });
         }
       }
-    } catch (pushErr) {
-      logger.error('admin_push_notification_failed', {
-        errorCategory: 'provider',
-        origin: 'push_notification',
-        finality: 'retryable',
+      
+      logger.info('admin_new_order_push_dispatched', {
+        eventName: 'admin_new_order_push_dispatched',
         orderId,
+        restaurantId: 'main_restaurant', // Single restaurant instance
+        adminUserIds: adminUserIds.length,
+        tokenCount,
+        provider: 'expo',
+        correlationId: null
+      });
+    } catch (pushErr) {
+      logger.error('admin_new_order_push_failed', {
+        eventName: 'admin_new_order_push_failed',
+        orderId,
+        restaurantId: 'main_restaurant',
+        provider: 'expo',
+        correlationId: null,
         errorMessage: pushErr.message
       });
     }

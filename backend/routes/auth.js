@@ -88,19 +88,52 @@ router.post('/push-token', async (req, res) => {
       return res.status(400).json({ error: 'Push token is required' });
     }
     
-    // If user has an ID (database user), update their push token
+    const now = new Date();
+    const tokenPrefix = pushToken.substring(0, 8);
+    
+    // Upsert logic: Always overwrite existing token and update timestamp
     if (decoded.id) {
-      await User.findByIdAndUpdate(decoded.id, { pushToken });
-    } else {
-      // Try to find user by username and update (for legacy tokens without ID)
-      const user = await User.findOneAndUpdate(
-        { username: decoded.username },
-        { pushToken },
+      const result = await User.findByIdAndUpdate(
+        decoded.id, 
+        { 
+          pushToken: pushToken,
+          pushTokenUpdatedAt: now
+        },
         { new: true }
       );
+      
+      logger.info('admin_push_token_updated', {
+        eventName: 'admin_push_token_updated',
+        adminId: decoded.id,
+        username: decoded.username,
+        tokenPrefix: tokenPrefix,
+        updatedAt: now.toISOString()
+      });
+      
+    } else {
+      // Legacy support: find user by username and update
+      const user = await User.findOneAndUpdate(
+        { username: decoded.username },
+        { 
+          pushToken: pushToken,
+          pushTokenUpdatedAt: now
+        },
+        { new: true }
+      );
+      
+      if (user) {
+        logger.info('admin_push_token_updated_legacy', {
+          eventName: 'admin_push_token_updated',
+          adminId: user._id,
+          username: decoded.username,
+          tokenPrefix: tokenPrefix,
+          updatedAt: now.toISOString(),
+          legacy: true
+        });
+      }
     }
     
-    res.json({ message: 'Push token updated' });
+    res.json({ message: 'Push token updated', updatedAt: now });
   } catch (error) {
     logger.error('push_token_update_failed', {
       errorCategory: 'domain',
