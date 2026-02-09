@@ -31,9 +31,11 @@ const heroSectionRoutes = require('./routes/heroSection');
 const offersRoutes = require('./routes/offers');
 const whatsappBroadcastRoutes = require('./routes/whatsappBroadcast');
 const settingsRoutes = require('./routes/settings');
+const restaurantConfigRoutes = require('./routes/restaurantConfig');
 const observabilityRoutes = require('./routes/observability');
 const interventionRoutes = require('./routes/intervention');
 const orderScheduler = require('./services/orderScheduler');
+const acceptanceWatchdog = require('./services/acceptanceWatchdog');
 const dailyCleanup = require('./services/dailyCleanup');
 const categoryScheduler = require('./services/categoryScheduler');
 const orderCleanup = require('./services/orderCleanup');
@@ -68,6 +70,7 @@ mongoose.connect(process.env.MONGODB_URI)
     });
     // Start schedulers after DB connection
     orderScheduler.start();
+    acceptanceWatchdog.start();
     dailyCleanup.start();
     categoryScheduler.start();
     orderCleanup.start();
@@ -116,6 +119,7 @@ app.use('/api/hero-sections', adminLimiter, heroSectionRoutes);
 app.use('/api/offers', adminLimiter, offersRoutes);
 app.use('/api/whatsapp-broadcast', adminLimiter, whatsappBroadcastRoutes);
 app.use('/api/settings', adminLimiter, settingsRoutes);
+app.use('/api/restaurant', adminLimiter, restaurantConfigRoutes);
 app.use('/api/observability', adminLimiter, authMiddleware, observabilityRoutes);
 app.use('/api/admin/interventions', adminLimiter, interventionRoutes);
 
@@ -150,13 +154,21 @@ app.get('/api/events', (req, res) => {
 });
 
 // Broadcast to all SSE clients
-const broadcast = (type) => sseClients.forEach(c => c.write(`data: ${JSON.stringify({ type })}\n\n`));
+const broadcast = (event) => {
+  const message = typeof event === 'string' 
+    ? JSON.stringify({ type: event })
+    : JSON.stringify(event);
+  sseClients.forEach(c => c.write(`data: ${message}\n\n`));
+};
 
 dataEvents.on('orders', () => broadcast('orders'));
 dataEvents.on('dashboard', () => broadcast('dashboard'));
 dataEvents.on('customers', () => broadcast('customers'));
 dataEvents.on('menu', () => broadcast('menu'));
 dataEvents.on('deliveryboys', () => broadcast('deliveryboys'));
+dataEvents.on('ORDER_ACCEPTANCE_CRITICAL', (data) => broadcast({ type: 'ORDER_ACCEPTANCE_CRITICAL', data }));
+dataEvents.on('ORDER_ACCEPTANCE_ESCALATED', (data) => broadcast({ type: 'ORDER_ACCEPTANCE_ESCALATED', data }));
+dataEvents.on('OWNER_ESCALATION_ALERT', (data) => broadcast({ type: 'OWNER_ESCALATION_ALERT', data }));
 
 // Test endpoint for Google Sheets sync
 // Only available in non-production environments

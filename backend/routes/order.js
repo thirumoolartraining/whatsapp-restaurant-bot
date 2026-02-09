@@ -9,6 +9,7 @@ const razorpayService = require('../services/razorpay');
 const chatbotImagesService = require('../services/chatbotImages');
 const authenticate = require('../middleware/authenticate');
 const authorize = require('../middleware/authorize');
+const escalationAuth = require('../middleware/escalationAuth');
 const Logger = require('../services/logger');
 const router = express.Router();
 
@@ -198,11 +199,34 @@ router.get('/:id', authenticate, authorize(['admin']), async (req, res) => {
   }
 });
 
-router.put('/:id/status', authenticate, authorize(['admin']), async (req, res) => {
+router.put('/:id/status', authenticate, authorize(['admin']), escalationAuth, async (req, res) => {
   try {
     const { status, message, actualPaymentMethod } = req.body;
     const order = await Order.findById(req.params.id);
     if (!order) return res.status(404).json({ error: 'Order not found' });
+
+    // Safe allowlist for admin status updates - prevent accidental clobbering of acceptance fields
+    const allowedFields = [
+      'status', 'paymentStatus', 'actualPaymentMethod', 'statusUpdatedAt', 
+      'deliveredAt', 'cancellationReason', 'trackingUpdates', 'refundStatus',
+      'refundAmount', 'refundRequestedAt', 'refundProcessedAt', 'refundId',
+      'refundInitiatedAt', 'returnReason', 'assignedTo', 'assignedAt',
+      'deliveryPartnerName', 'estimatedDeliveryTime'
+    ];
+    
+    // Disallowed fields in this phase - these should only be set by business logic
+    const disallowedFields = [
+      'acceptanceStartedAt', 'acceptanceDeadline', 'escalationLevel', 'criticalAlertAt'
+    ];
+    
+    // Check if request contains any disallowed fields
+    const requestFields = Object.keys(req.body);
+    const foundDisallowed = requestFields.filter(field => disallowedFields.includes(field));
+    if (foundDisallowed.length > 0) {
+      return res.status(400).json({ 
+        error: `Cannot modify acceptance fields via status update. Found: ${foundDisallowed.join(', ')}` 
+      });
+    }
 
     const statusLabels = {
       pending: 'Pending', confirmed: 'Confirmed', preparing: 'Preparing', ready: 'Ready',
@@ -211,6 +235,25 @@ router.put('/:id/status', authenticate, authorize(['admin']), async (req, res) =
 
     order.status = status;
     order.trackingUpdates.push({ status, message: message || `Status updated to ${statusLabels[status] || status}` });
+    
+    // Reset escalation level when owner/authorized user takes action on escalated order
+    if (order.escalationLevel === 'escalated' && ['preparing', 'ready', 'out_for_delivery', 'delivered', 'cancelled'].includes(status)) {
+      order.escalationLevel = 'none';
+      order.escalatedToUserId = null;
+      order.escalatedAt = null;
+      order.trackingUpdates.push({ 
+        status: 'escalation_resolved', 
+        message: `Escalation resolved by ${req.user?.name || 'authorized user'}` 
+      });
+      
+      logger.info('escalation_resolved', {
+        orderId: order.orderId,
+        previousEscalationLevel: 'escalated',
+        newStatus: status,
+        resolvedBy: req.user?.id,
+        resolvedByName: req.user?.name
+      });
+    }
     
     // Handle actual payment method for pickup orders (Pay at Hotel)
     if (actualPaymentMethod && order.serviceType === 'pickup') {

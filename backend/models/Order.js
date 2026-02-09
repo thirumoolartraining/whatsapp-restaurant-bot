@@ -52,6 +52,18 @@ const orderSchema = new mongoose.Schema({
   cancellationReason: { type: String },
   statusUpdatedAt: { type: Date }, // Track when status changed to delivered/cancelled for auto-cleanup
   isHidden: { type: Boolean, default: false }, // Hidden from admin dashboard but kept for user tracking/reviews
+  // Time-bound acceptance discipline fields
+  acceptanceStartedAt: { type: Date, default: null }, // When acceptance window starts
+  acceptanceDeadline: { type: Date, default: null }, // When acceptance window ends
+  escalationLevel: { 
+    type: String, 
+    enum: ['none', 'critical', 'escalated'], 
+    default: 'none' 
+  }, // Current escalation level
+  criticalAlertAt: { type: Date, default: null }, // When critical alert should be triggered
+  // Escalation routing fields
+  escalatedToUserId: { type: String, default: null }, // User ID of owner/manager who received escalation
+  escalatedAt: { type: Date, default: null }, // When escalation was sent to owner
   // Delivery partner assignment
   assignedTo: { type: mongoose.Schema.Types.ObjectId, ref: 'DeliveryBoy', default: null },
   assignedAt: { type: Date },
@@ -79,6 +91,7 @@ orderSchema.index({ createdAt: -1 });
 orderSchema.index({ updatedAt: -1 }); // For efficient change detection
 orderSchema.index({ 'customer.phone': 1 });
 orderSchema.index({ status: 1, paymentStatus: 1, refundStatus: 1 }); // Compound index for dashboard queries
+orderSchema.index({ status: 1, paymentStatus: 1, acceptanceDeadline: 1, escalationLevel: 1 }); // Compound index for acceptance discipline queries
 orderSchema.index({ status: 1, updatedAt: -1 }); // For filtered change detection
 orderSchema.index({ status: 1, statusUpdatedAt: 1 }); // For auto-cleanup of delivered/cancelled orders
 orderSchema.index({ isHidden: 1 }); // For filtering hidden orders

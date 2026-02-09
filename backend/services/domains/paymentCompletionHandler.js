@@ -57,12 +57,39 @@ async function handlePaymentSuccess(order, razorpay_payment_id = null, correlati
   logger.logDomainHandlerEntry('payment', 'handlePaymentSuccess', ['order', 'razorpay_payment_id'], correlationId, messageId);
   
   try {
+    const wasAlreadyPaid = order.paymentStatus === 'paid';
+    
     order.paymentStatus = 'paid';
     if (razorpay_payment_id) {
       order.paymentId = razorpay_payment_id;
       order.razorpayPaymentId = razorpay_payment_id;
     }
     order.status = 'confirmed';
+    
+    // Start acceptance timer if this is the first time payment becomes successful
+    if (!wasAlreadyPaid && !order.acceptanceStartedAt) {
+      const now = new Date();
+      order.acceptanceStartedAt = now;
+      order.acceptanceDeadline = new Date(now.getTime() + 3 * 60 * 1000); // 3 minutes
+      order.escalationLevel = 'none';
+      
+      // Emit acceptance timer started event
+      const dataEvents = require('../eventEmitter');
+      dataEvents.emit('ORDER_ACCEPTANCE_TIMER_STARTED', {
+        orderId: order.orderId,
+        restaurantId: order.restaurantId || null,
+        acceptanceStartedAt: order.acceptanceStartedAt,
+        acceptanceDeadline: order.acceptanceDeadline,
+        escalationLevel: order.escalationLevel
+      });
+      
+      logger.info('acceptance_timer_started', {
+        orderId: order.orderId,
+        acceptanceStartedAt: order.acceptanceStartedAt,
+        acceptanceDeadline: order.acceptanceDeadline
+      });
+    }
+    
     order.trackingUpdates.push({ 
       status: 'confirmed', 
       message: 'Payment received via UPI', 
@@ -170,30 +197,56 @@ async function handleWebhookPaymentSuccess(order, payment, correlationId = null,
   logger.logDomainHandlerEntry('payment', 'handleWebhookPaymentSuccess', ['order', 'payment'], correlationId, messageId);
   
   try {
+    const wasAlreadyPaid = order.paymentStatus === 'paid';
+    
     if (order.paymentStatus !== 'paid') {
       order.paymentStatus = 'paid';
       order.razorpayPaymentId = payment.id;
       order.status = 'confirmed';
+      
+      // Start acceptance timer if this is the first time payment becomes successful
+      if (!order.acceptanceStartedAt) {
+        const now = new Date();
+        order.acceptanceStartedAt = now;
+        order.acceptanceDeadline = new Date(now.getTime() + 3 * 60 * 1000); // 3 minutes
+        order.escalationLevel = 'none';
+        
+        // Emit acceptance timer started event
+        const dataEvents = require('../eventEmitter');
+        dataEvents.emit('ORDER_ACCEPTANCE_TIMER_STARTED', {
+          orderId: order.orderId,
+          restaurantId: order.restaurantId || null,
+          acceptanceStartedAt: order.acceptanceStartedAt,
+          acceptanceDeadline: order.acceptanceDeadline,
+          escalationLevel: order.escalationLevel
+        });
+        
+        logger.info('acceptance_timer_started', {
+          orderId: order.orderId,
+          acceptanceStartedAt: order.acceptanceStartedAt,
+          acceptanceDeadline: order.acceptanceDeadline
+        });
+      }
+      
       order.trackingUpdates.push({ status: 'confirmed', message: 'Payment received via webhook', timestamp: new Date() });
       await order.save();
       
-    
-    // Emit event for real-time updates
-    const dataEvents = require('../eventEmitter');
-    dataEvents.emit('orders');
-    dataEvents.emit('dashboard');
-    
-    // Update Google Sheets
-    googleSheets.updateOrderStatus(order.orderId, 'confirmed', 'paid').catch(err =>
-      logger.error('google_sheets_sync_failed', {
-        errorCategory: 'provider',
-        origin: 'google_sheets',
-        finality: 'retryable',
-        orderId: order.orderId,
-        errorMessage: err.message
-      })
-    );
-  }
+      // Emit event for real-time updates
+      const dataEvents = require('../eventEmitter');
+      dataEvents.emit('orders');
+      dataEvents.emit('dashboard');
+      
+      // Update Google Sheets
+      googleSheets.updateOrderStatus(order.orderId, 'confirmed', 'paid').catch(err =>
+        logger.error('google_sheets_sync_failed', {
+          errorCategory: 'provider',
+          origin: 'google_sheets',
+          finality: 'retryable',
+          orderId: order.orderId,
+          errorMessage: err.message
+        })
+      );
+    }
   
   logger.logDomainHandlerExit('payment', 'handleWebhookPaymentSuccess', true, 'webhook_payment_processed', correlationId, messageId);
   } catch (error) {
@@ -206,10 +259,37 @@ async function handleCallbackPaymentSuccess(order, razorpay_payment_id, correlat
   logger.logDomainHandlerEntry('payment', 'handleCallbackPaymentSuccess', ['order', 'razorpay_payment_id'], correlationId, messageId);
   
   try {
+    const wasAlreadyPaid = order.paymentStatus === 'paid';
+    
     order.paymentStatus = 'paid';
     order.paymentId = razorpay_payment_id;
     order.razorpayPaymentId = razorpay_payment_id; // Store for refunds
     order.status = 'confirmed';
+    
+    // Start acceptance timer if this is the first time payment becomes successful
+    if (!wasAlreadyPaid && !order.acceptanceStartedAt) {
+      const now = new Date();
+      order.acceptanceStartedAt = now;
+      order.acceptanceDeadline = new Date(now.getTime() + 3 * 60 * 1000); // 3 minutes
+      order.escalationLevel = 'none';
+      
+      // Emit acceptance timer started event
+      const dataEvents = require('../eventEmitter');
+      dataEvents.emit('ORDER_ACCEPTANCE_TIMER_STARTED', {
+        orderId: order.orderId,
+        restaurantId: order.restaurantId || null,
+        acceptanceStartedAt: order.acceptanceStartedAt,
+        acceptanceDeadline: order.acceptanceDeadline,
+        escalationLevel: order.escalationLevel
+      });
+      
+      logger.info('acceptance_timer_started', {
+        orderId: order.orderId,
+        acceptanceStartedAt: order.acceptanceStartedAt,
+        acceptanceDeadline: order.acceptanceDeadline
+      });
+    }
+    
     order.trackingUpdates.push({ status: 'confirmed', message: 'Payment received, order confirmed' });
     await order.save();
 

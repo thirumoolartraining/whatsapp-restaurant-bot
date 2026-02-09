@@ -1,9 +1,12 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { 
   RefreshCw, X, Truck, ChefHat, CheckCircle, Package, Clock, 
-  Filter, Search, MapPin, CreditCard, ExternalLink, ChevronDown, ChevronUp, User
+  Filter, Search, MapPin, CreditCard, ExternalLink, ChevronDown, ChevronUp, User,
+  AlertTriangle, AlertCircle
 } from 'lucide-react';
 import api from '../api';
+import eventService from '../services/eventService';
+import soundUtils from '../utils/soundUtils';
 
 // Smart diff function to detect actual changes
 const getOrderChanges = (oldOrders, newOrders) => {
@@ -49,6 +52,26 @@ const statusConfig = {
   refunded: { bg: 'bg-green-100', text: 'text-green-700', border: 'border-green-300', dot: 'bg-green-600', icon: RefreshCw, label: 'Refunded' },
   refund_failed: { bg: 'bg-red-100', text: 'text-red-700', border: 'border-red-300', dot: 'bg-red-600', icon: X, label: 'Refund Failed' },
   refund_processing: { bg: 'bg-pink-50', text: 'text-pink-700', border: 'border-pink-200', dot: 'bg-pink-500', icon: RefreshCw, label: 'Refund Processing' }
+};
+
+// Escalation level configurations
+const escalationConfig = {
+  critical: { 
+    bg: 'bg-red-50', 
+    text: 'text-red-800', 
+    border: 'border-red-300', 
+    icon: AlertTriangle, 
+    label: 'CRITICAL',
+    priority: 1
+  },
+  escalated: { 
+    bg: 'bg-red-100', 
+    text: 'text-red-900', 
+    border: 'border-red-400', 
+    icon: AlertCircle, 
+    label: 'ESCALATED',
+    priority: 2
+  }
 };
 
 const filterOptions = [
@@ -250,6 +273,130 @@ export default function Orders() {
   const initialLoadDone = useRef(false);
   const isPollingRef = useRef(false);
 
+  // Initialize audio on first user interaction
+  useEffect(() => {
+    const handleUserInteraction = () => {
+      soundUtils.initAudio();
+      document.removeEventListener('click', handleUserInteraction);
+      document.removeEventListener('keydown', handleUserInteraction);
+    };
+    
+    document.addEventListener('click', handleUserInteraction);
+    document.addEventListener('keydown', handleUserInteraction);
+    
+    return () => {
+      document.removeEventListener('click', handleUserInteraction);
+      document.removeEventListener('keydown', handleUserInteraction);
+    };
+  }, []);
+
+  // Subscribe to escalation events
+  useEffect(() => {
+    const unsubscribeCritical = eventService.subscribe('ORDER_ACCEPTANCE_CRITICAL', (data) => {
+      console.log('[Orders] ORDER_ACCEPTANCE_CRITICAL received:', data);
+      
+      // Update local order escalation level
+      setOrders(prevOrders => 
+        prevOrders.map(order => 
+          order.orderId === data.orderId 
+            ? { ...order, escalationLevel: 'critical', criticalAlertAt: data.criticalAlertAt }
+            : order
+        )
+      );
+      
+      // Update ref as well
+      ordersRef.current = ordersRef.current.map(order => 
+        order.orderId === data.orderId 
+          ? { ...order, escalationLevel: 'critical', criticalAlertAt: data.criticalAlertAt }
+          : order
+      );
+      
+      // Play critical alert sound (only once per order)
+      soundUtils.playCriticalAlert(data.orderId);
+      
+      // Highlight the updated order
+      setUpdatedIds(new Set([data.orderId]));
+      setTimeout(() => setUpdatedIds(new Set()), 3000);
+    });
+
+    const unsubscribeEscalated = eventService.subscribe('ORDER_ACCEPTANCE_ESCALATED', (data) => {
+      console.log('[Orders] ORDER_ACCEPTANCE_ESCALATED received:', data);
+      
+      // Update local order escalation level and routing info
+      setOrders(prevOrders => 
+        prevOrders.map(order => 
+          order.orderId === data.orderId 
+            ? { 
+                ...order, 
+                escalationLevel: 'escalated',
+                escalatedToUserId: data.escalatedToUserId,
+                escalatedAt: data.escalatedAt
+              }
+            : order
+        )
+      );
+      
+      // Update ref as well
+      ordersRef.current = ordersRef.current.map(order => 
+        order.orderId === data.orderId 
+          ? { 
+              ...order, 
+              escalationLevel: 'escalated',
+              escalatedToUserId: data.escalatedToUserId,
+              escalatedAt: data.escalatedAt
+            }
+          : order
+      );
+      
+      // Highlight the updated order
+      setUpdatedIds(new Set([data.orderId]));
+      setTimeout(() => setUpdatedIds(new Set()), 3000);
+    });
+
+    const unsubscribeOwnerAlert = eventService.subscribe('OWNER_ESCALATION_ALERT', (data) => {
+      console.log('[Orders] OWNER_ESCALATION_ALERT received:', data);
+      
+      // Play owner escalation sound (only once per order)
+      soundUtils.playOwnerEscalationAlert(data.orderId);
+      
+      // Update local order with escalation info
+      setOrders(prevOrders => 
+        prevOrders.map(order => 
+          order.orderId === data.orderId 
+            ? { 
+                ...order, 
+                escalationLevel: 'escalated',
+                escalatedToUserId: data.targetUserId,
+                escalatedAt: data.escalatedAt
+              }
+            : order
+        )
+      );
+      
+      // Update ref as well
+      ordersRef.current = ordersRef.current.map(order => 
+        order.orderId === data.orderId 
+          ? { 
+              ...order, 
+              escalationLevel: 'escalated',
+              escalatedToUserId: data.targetUserId,
+              escalatedAt: data.escalatedAt
+            }
+          : order
+      );
+      
+      // Highlight the updated order with longer duration for owner alerts
+      setUpdatedIds(new Set([data.orderId]));
+      setTimeout(() => setUpdatedIds(new Set()), 5000);
+    });
+
+    return () => {
+      unsubscribeCritical();
+      unsubscribeEscalated();
+      unsubscribeOwnerAlert();
+    };
+  }, []);
+
   // Fetch delivery partners
   const fetchDeliveryPartners = useCallback(async () => {
     setLoadingPartners(true);
@@ -442,10 +589,34 @@ export default function Orders() {
     }
   };
 
-  const filteredOrders = orders.filter(order => 
-    order.orderId?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    order.customer?.phone?.includes(searchTerm)
-  );
+  const filteredOrders = orders
+    .filter(order => 
+      order.orderId?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      order.customer?.phone?.includes(searchTerm)
+    )
+    .sort((a, b) => {
+      // Priority 1: Escalated orders (highest priority)
+      const aEscalation = escalationConfig[a.escalationLevel];
+      const bEscalation = escalationConfig[b.escalationLevel];
+      
+      if (aEscalation && bEscalation) {
+        return bEscalation.priority - aEscalation.priority; // Higher priority first
+      }
+      if (aEscalation) return -1; // A has escalation, B doesn't
+      if (bEscalation) return 1;  // B has escalation, A doesn't
+      
+      // Priority 2: Status-based ordering (pending > confirmed > preparing > ready > out_for_delivery > delivered)
+      const statusOrder = { pending: 0, confirmed: 1, preparing: 2, ready: 3, out_for_delivery: 4, delivered: 5 };
+      const aStatusOrder = statusOrder[a.status] ?? 999;
+      const bStatusOrder = statusOrder[b.status] ?? 999;
+      
+      if (aStatusOrder !== bStatusOrder) {
+        return aStatusOrder - bStatusOrder;
+      }
+      
+      // Priority 3: Newest first (as final tiebreaker)
+      return new Date(b.createdAt) - new Date(a.createdAt);
+    });
 
   const getActionButton = (order) => {
     if (order.refundStatus === 'completed' || order.refundStatus === 'pending') return null;
@@ -525,13 +696,15 @@ export default function Orders() {
         <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-5">
           {filteredOrders.map(order => {
             const config = statusConfig[order.status] || statusConfig.pending;
+            const escalation = escalationConfig[order.escalationLevel];
             const StatusIcon = config.icon;
+            const EscalationIcon = escalation?.icon;
             const isUpdated = updatedIds.has(order._id);
             const totalItems = order.items?.reduce((sum, item) => sum + item.quantity, 0) || 0;
             return (
-              <div key={order._id} className={`bg-white rounded-2xl shadow-card overflow-hidden transition-all duration-300 hover:shadow-lg flex flex-col ${isUpdated ? 'ring-2 ring-primary-400 scale-[1.01]' : ''}`}>
+              <div key={order._id} className={`bg-white rounded-2xl shadow-card overflow-hidden transition-all duration-300 hover:shadow-lg flex flex-col ${isUpdated ? 'ring-2 ring-primary-400 scale-[1.01]' : ''} ${escalation ? 'ring-2 ' + escalation.border.replace('border-', 'border-') : ''}`}>
                 {/* Header */}
-                <div className="px-5 py-4 border-b border-dark-100">
+                <div className={`px-5 py-4 border-b border-dark-100 ${escalation ? escalation.bg : ''}`}>
                   <div className="flex items-center justify-between mb-3">
                     <div className="flex items-center gap-3">
                       <div className={`w-9 h-9 rounded-lg ${config.bg} flex items-center justify-center`}>
@@ -542,10 +715,20 @@ export default function Orders() {
                         <p className="text-xs text-dark-400 capitalize">{order.serviceType}</p>
                       </div>
                     </div>
-                    <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold ${config.bg} ${config.text}`}>
-                      <span className={`w-1.5 h-1.5 rounded-full ${config.dot}`}></span>
-                      {config.label}
-                    </span>
+                    <div className="flex items-center gap-2">
+                      {/* Escalation Badge */}
+                      {escalation && (
+                        <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-bold ${escalation.bg} ${escalation.text} ${escalation.border} border`}>
+                          <EscalationIcon className="w-3 h-3" />
+                          {escalation.label}
+                        </span>
+                      )}
+                      {/* Status Badge */}
+                      <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold ${config.bg} ${config.text}`}>
+                        <span className={`w-1.5 h-1.5 rounded-full ${config.dot}`}></span>
+                        {config.label}
+                      </span>
+                    </div>
                   </div>
                   {/* Customer Info */}
                   <div className="flex items-center gap-2.5">
@@ -576,6 +759,21 @@ export default function Orders() {
                     </div>
                     <ScrollableItemsList items={order.items} />
                   </div>
+
+                  {/* Escalation Message */}
+                  {order.escalationLevel === 'escalated' && (
+                    <div className="flex items-start gap-2.5 p-2.5 bg-red-50 border border-red-200 rounded-lg">
+                      <AlertCircle className="w-4 h-4 text-red-600 flex-shrink-0 mt-0.5" />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-bold text-red-800">ESCALATED — STAFF DID NOT RESPOND</p>
+                        {order.escalatedAt && (
+                          <p className="text-xs text-red-600 mt-1">
+                            Escalated at {new Date(order.escalatedAt).toLocaleTimeString()}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  )}
 
                   {/* Delivery Address */}
                   {order.deliveryAddress?.address && (

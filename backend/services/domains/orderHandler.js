@@ -284,7 +284,12 @@ const orderHandler = {
       } : null,
       paymentMethod: 'upi', // Default, will be overridden by payment logic
       paymentStatus: 'pending',
-      trackingUpdates: [{ status: 'pending', message: 'Order created, awaiting payment' }]
+      trackingUpdates: [{ status: 'pending', message: 'Order created, awaiting payment' }],
+      // Initialize acceptance discipline fields
+      escalationLevel: 'none',
+      acceptanceStartedAt: null,
+      acceptanceDeadline: null,
+      criticalAlertAt: null
     });
     
     return {
@@ -357,7 +362,12 @@ const orderHandler = {
         serviceType: 'pickup',
         paymentMethod: state.paymentMethod || 'cod',
         paymentStatus: 'pending',
-        status: 'pending'
+        status: 'pending',
+        // Initialize acceptance discipline fields
+        escalationLevel: 'none',
+        acceptanceStartedAt: null,
+        acceptanceDeadline: null,
+        criticalAlertAt: null
       });
 
 
