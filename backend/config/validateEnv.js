@@ -50,8 +50,19 @@ function validateEnv() {
     }
   }
 
-  // Log warnings for non-production environments
-  if (warnings.length > 0 && process.env.NODE_ENV !== 'production') {
+  const redisConfigured = Boolean(process.env.REDIS_HOST && process.env.REDIS_PORT);
+  const queueFallbackAllowed = process.env.QUEUE_FALLBACK_ALLOWED === 'true';
+
+  if (!redisConfigured && !queueFallbackAllowed) {
+    errors.push('REDIS_HOST/REDIS_PORT or QUEUE_FALLBACK_ALLOWED=true (queue)');
+  }
+
+  if (process.env.NODE_ENV === 'production' && !redisConfigured && queueFallbackAllowed) {
+    warnings.push('Production queue is using in-process fallback because Redis is not configured');
+  }
+
+  // Log configuration warnings that do not expose secrets
+  if (warnings.length > 0) {
     warnings.forEach(warning => {
       logger.warn('environment_validation_warning', {
         errorCategory: 'configuration',

@@ -95,7 +95,7 @@ function getClient() {
  * @returns {boolean} Connection status
  */
 function isRedisConnected() {
-  return isConnected && redisClient && redisClient.status === 'ready';
+  return Boolean(isConnected && redisClient && (redisClient.status === 'ready' || redisClient.isReady));
 }
 
 /**

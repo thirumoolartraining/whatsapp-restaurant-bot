@@ -36,7 +36,14 @@ function metaSignatureVerify(req, res, next) {
     .update(req.rawBody)
     .digest('hex');
 
-  if (crypto.timingSafeEqual(Buffer.from(receivedHash, 'hex'), Buffer.from(computedHash, 'hex'))) {
+  const receivedBuffer = Buffer.from(receivedHash, 'hex');
+  const computedBuffer = Buffer.from(computedHash, 'hex');
+
+  if (receivedBuffer.length !== computedBuffer.length) {
+    return res.status(401).json({ error: 'Invalid signature' });
+  }
+
+  if (crypto.timingSafeEqual(receivedBuffer, computedBuffer)) {
     return next();
   } else {
     return res.status(401).json({ error: 'Invalid signature' });

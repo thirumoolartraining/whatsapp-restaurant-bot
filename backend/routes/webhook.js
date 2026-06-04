@@ -15,6 +15,8 @@ const DeliveryStatus = require('../models/DeliveryStatus');
 const router = express.Router();
 
 const logger = new Logger('webhook');
+const isProduction = process.env.NODE_ENV === 'production';
+
 
 // Process delivery status events from Meta webhooks
 async function processStatusEvents(statuses, contactsMap, correlationId) {
@@ -96,18 +98,25 @@ async function processStatusEvents(statuses, contactsMap, correlationId) {
   }
 }
 
-// Raw body capture middleware for signature verification
-router.use('/meta', express.raw({ type: 'application/json' }), (req, res, next) => {
+// Raw body capture middleware for Meta POST signature verification.
+// This must only run on POST /meta; GET /meta is Meta's webhook verification handshake.
+const parseMetaRawJson = (req, res, next) => {
+  if (!Buffer.isBuffer(req.body)) {
+    return res.status(400).json({ error: 'Expected raw JSON body' });
+  }
+
   req.rawBody = req.body;
-  // Parse JSON body normally for downstream processing
+
   try {
-    req.body = JSON.parse(req.body);
+    req.body = JSON.parse(req.body.toString('utf8'));
   } catch (error) {
     return res.status(400).json({ error: 'Invalid JSON' });
   }
-  next();
-});
 
+  next();
+};
+
+if (!isProduction) {
 // Test Google Sheets connection
 router.get('/test-sheets', async (req, res) => {
   const correlationId = logger.generateCorrelationId();
@@ -235,7 +244,7 @@ router.get('/test-menu/:phone', async (req, res) => {
 });
 
 // Simulate incoming message (for testing when Meta test number doesn't forward messages)
-router.post('/simulate', async (req, res) => {
+router.post('/simulate', express.json(), async (req, res) => {
   try {
     const { phone, message, selectedId } = req.body;
     const messageType = selectedId ? 'list' : 'text';
@@ -295,6 +304,8 @@ router.get('/debug/:phone', async (req, res) => {
   }
 });
 
+}
+
 // Health check for webhook
 router.get('/whatsapp', (req, res) => {
   res.json({ status: 'Webhook is active', timestamp: new Date().toISOString() });
@@ -342,7 +353,7 @@ router.get('/meta', (req, res) => {
 });
 
 // Meta WhatsApp Cloud API webhook endpoint
-router.post('/meta', metaSignatureVerify, webhookLimiter, async (req, res) => {
+router.post('/meta', express.raw({ type: 'application/json' }), parseMetaRawJson, metaSignatureVerify, webhookLimiter, async (req, res) => {
   const correlationId = logger.generateCorrelationId();
   
   logger.info('webhook_entry', {

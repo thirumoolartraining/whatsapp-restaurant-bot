@@ -17,6 +17,49 @@ const logger = new Logger('abuseStore');
 let storeAvailable = null;
 let lastAvailabilityCheck = 0;
 const AVAILABILITY_CHECK_INTERVAL_MS = 30000; // 30 seconds
+const memoryFallbackEnabled = process.env.ABUSE_STORE_MEMORY_FALLBACK === 'true';
+const memoryCounters = new Map();
+
+function getMemoryCounter(key) {
+  const counter = memoryCounters.get(key);
+  if (!counter) {
+    return null;
+  }
+
+  if (counter.expiresAt && counter.expiresAt <= Date.now()) {
+    memoryCounters.delete(key);
+    return null;
+  }
+
+  return counter;
+}
+
+function incrMemory(key, ttlMs, limit, resetAt = null) {
+  const now = Date.now();
+  const existing = getMemoryCounter(key);
+  const counter = existing || { count: 0, expiresAt: now + ttlMs };
+
+  counter.count += 1;
+  memoryCounters.set(key, counter);
+
+  const allowed = counter.count <= limit;
+  const remaining = Math.max(0, limit - counter.count);
+  return resetAt ? { allowed, remaining, resetAt } : { allowed, remaining };
+}
+
+function getAbuseCounterModel() {
+  const mongoose = require('mongoose');
+
+  if (mongoose.models.AbuseCounter) {
+    return mongoose.models.AbuseCounter;
+  }
+
+  return mongoose.model('AbuseCounter', new mongoose.Schema({
+    _id: String,
+    count: { type: Number, default: 0 },
+    expiresAt: { type: Date, default: Date.now, expires: 0 }
+  }));
+}
 
 /**
  * Check if abuse store is available
@@ -31,6 +74,12 @@ async function isStoreAvailable() {
   }
   
   try {
+    if (memoryFallbackEnabled) {
+      storeAvailable = true;
+      lastAvailabilityCheck = now;
+      return true;
+    }
+
     // Try Redis first
     if (isRedisConnected()) {
       const redis = getRedisClient();
@@ -78,6 +127,13 @@ async function incrWindow(key, windowMs, limit) {
   }
   
   try {
+    if (memoryFallbackEnabled) {
+      const now = Date.now();
+      const windowStart = now - (now % windowMs);
+      const windowKey = `${key}:${windowStart}`;
+      return incrMemory(windowKey, windowMs + 1000, limit, windowStart + windowMs);
+    }
+
     // Try Redis first
     if (isRedisConnected()) {
       return await incrWindowRedis(key, windowMs, limit);
@@ -108,6 +164,10 @@ async function incrFixed(key, ttlMs, limit) {
   }
   
   try {
+    if (memoryFallbackEnabled) {
+      return incrMemory(key, ttlMs, limit);
+    }
+
     // Try Redis first
     if (isRedisConnected()) {
       return await incrFixedRedis(key, ttlMs, limit);
@@ -134,6 +194,11 @@ async function get(key) {
   }
   
   try {
+    if (memoryFallbackEnabled) {
+      const counter = getMemoryCounter(key);
+      return counter ? counter.count : null;
+    }
+
     // Try Redis first
     if (isRedisConnected()) {
       const redis = getRedisClient();
@@ -194,11 +259,7 @@ async function incrWindowMongo(key, windowMs, limit) {
   const windowKey = `${key}:${windowStart}`;
   
   // Use atomic findAndModify for MongoDB
-  const AbuseCounter = mongoose.model('AbuseCounter', new mongoose.Schema({
-    _id: String,
-    count: { type: Number, default: 0 },
-    expiresAt: { type: Date, default: Date.now, expires: 0 }
-  }));
+  const AbuseCounter = getAbuseCounterModel();
   
   const result = await AbuseCounter.findOneAndUpdate(
     { _id: windowKey },
@@ -220,11 +281,7 @@ async function incrWindowMongo(key, windowMs, limit) {
 async function incrFixedMongo(key, ttlMs, limit) {
   const mongoose = require('mongoose');
   
-  const AbuseCounter = mongoose.model('AbuseCounter', new mongoose.Schema({
-    _id: String,
-    count: { type: Number, default: 0 },
-    expiresAt: { type: Date, default: Date.now, expires: 0 }
-  }));
+  const AbuseCounter = getAbuseCounterModel();
   
   const result = await AbuseCounter.findOneAndUpdate(
     { _id: key },
@@ -245,11 +302,7 @@ async function incrFixedMongo(key, ttlMs, limit) {
 async function getMongo(key) {
   const mongoose = require('mongoose');
   
-  const AbuseCounter = mongoose.model('AbuseCounter', new mongoose.Schema({
-    _id: String,
-    count: { type: Number, default: 0 },
-    expiresAt: { type: Date, default: Date.now, expires: 0 }
-  }));
+  const AbuseCounter = getAbuseCounterModel();
   
   const doc = await AbuseCounter.findById(key);
   return doc ? doc.count : null;
