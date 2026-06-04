@@ -50,11 +50,15 @@ const app = express();
 // CORS configuration using explicit config
 app.options('*', cors(corsConfig));
 app.use(cors(corsConfig));
-app.use(express.json());
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // Production route audit middleware - detects attempts to access test/debug routes
 app.use(productionRouteAudit);
+
+// Register webhook before global JSON parsing so Meta signature verification can use the raw body.
+app.use('/api/webhook', webhookRoutes);
+
+app.use(express.json());
 
 // Log all API requests for debugging
 app.use('/api', (req, res, next) => {
@@ -103,10 +107,6 @@ mongoose.connect(process.env.MONGODB_URI)
 app.use('/api/auth', authLimiter, authRoutes);
 app.use('/api/menu', menuRoutes);
 app.use('/api/orders', orderRoutes);
-// Only register webhook routes in non-production environments
-if (process.env.NODE_ENV !== 'production') {
-  app.use('/api/webhook', webhookRoutes);
-}
 app.use('/api/payment', paymentRoutes);
 app.use('/api/customers', customerRoutes);
 app.use('/api/analytics', adminLimiter, analyticsRoutes);

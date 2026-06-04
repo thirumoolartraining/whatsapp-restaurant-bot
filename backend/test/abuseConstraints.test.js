@@ -5,6 +5,8 @@
  * Scriptable checks for abuse constraints functionality.
  */
 
+process.env.ABUSE_STORE_MEMORY_FALLBACK = process.env.ABUSE_STORE_MEMORY_FALLBACK || 'true';
+
 const { assertAbuseAllowed, isPhoneLocked, lockPhone } = require('../security/abuseGuard');
 const { getAbuseLimits } = require('../security/abusePolicy');
 const { get } = require('../security/abuseStore');
@@ -282,7 +284,14 @@ async function runAbuseTests() {
 
 // Run tests if this file is executed directly
 if (require.main === module) {
-  runAbuseTests().catch(console.error);
+  runAbuseTests()
+    .then((ok) => {
+      if (!ok) process.exitCode = 1;
+    })
+    .catch((error) => {
+      console.error(error);
+      process.exitCode = 1;
+    });
 }
 
 module.exports = {
